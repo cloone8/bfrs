@@ -74,7 +74,7 @@ impl BrainfuckVM {
         }
     }
 
-    pub fn run_program(&mut self, program: &Program) -> Result<(), ()> {
+    fn run_program(&mut self, program: &Program) -> Result<(), ()> {
         for instruction in &program.instructions {
             self.exec(instruction)?;
         }
