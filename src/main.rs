@@ -1,8 +1,5 @@
-use bfrs::add;
-
 fn main() {
-    println!(
-        "I'm using the library: {:?}",
-        add(1, 2)
-    );
+    let hello_world = "++++++++[>++++[>++>+++>+++>+<<<<-]>+>+>->>+[<]<-]>>.>---.+++++++..+++.>>.<-.<.+++.------.--------.>>+.>++.";
+
+    bfrs::run_string(hello_world).unwrap();
 }
