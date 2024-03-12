@@ -1,9 +1,9 @@
 [package]
 name = "cpr_bf"
 description = "A brainfuck interpreter"
+license = "MPL-2.0"
 version.workspace = true
 authors.workspace = true
-license-file.workspace = true
 homepage.workspace = true
 edition.workspace = true
 

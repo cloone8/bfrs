@@ -1,9 +1,9 @@
 [package]
 name = "cpr_bfvm"
 description = "A brainfuck interpreter"
+license = "GPL-3.0"
 version.workspace = true
 authors.workspace = true
-license-file.workspace = true
 homepage.workspace = true
 edition.workspace = true
 
