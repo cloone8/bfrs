@@ -1,4 +1,4 @@
-use std::{fs::File, io::{self, Read}, iter::repeat, marker::PhantomData, path::Path};
+use std::{convert::{TryFrom, TryInto}, fs::File, io::{self, Read}, iter::repeat, marker::PhantomData, path::Path};
 use num::{traits::{WrappingAdd, WrappingSub}, Unsigned};
 
 #[derive(Clone, Copy, Debug)]

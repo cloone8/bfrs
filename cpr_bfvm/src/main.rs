@@ -1,9 +1,11 @@
-use bfrs::{BrainfuckVM, DynamicAllocator};
+mod cli_args;
+
+use cpr_bf::{BrainfuckVM, DynamicAllocator};
 
 fn main() {
     let hello_world = "++++++++[>++++[>++>+++>+++>+<<<<-]>+>+>->>+[<]<-]>>.>---.+++++++..+++.>>.<-.<.+++.------.--------.>>+.>++.";
 
-    let mut vm = bfrs::VMBuilder::new()
+    let mut vm = cpr_bf::VMBuilder::new()
         .with_cell_type::<u64>()
         .with_allocator::<DynamicAllocator>()
         .with_preallocated_cells(16)
