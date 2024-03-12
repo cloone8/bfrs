@@ -108,12 +108,12 @@ impl BrainfuckVM {
             }
             Instruction::Incr => {
                 self.ensure_mem(self.data_ptr + 1)?;
-                self.data[self.data_ptr] += 1;
+                self.data[self.data_ptr] = self.data[self.data_ptr].wrapping_add(1);
                 Ok(instr_ptr + 1)
             },
             Instruction::Decr => {
                 self.ensure_mem(self.data_ptr + 1)?;
-                self.data[self.data_ptr] -= 1;
+                self.data[self.data_ptr] = self.data[self.data_ptr].wrapping_sub(1);
                 Ok(instr_ptr + 1)
             },
             Instruction::Output => {
