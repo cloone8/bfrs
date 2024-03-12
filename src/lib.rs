@@ -1,4 +1,4 @@
-use std::io::{self, Read};
+use std::{fs::File, io::{self, Read}, path::Path};
 use num::{traits::{WrappingAdd, WrappingSub}, Unsigned};
 
 #[derive(Clone, Copy, Debug)]
@@ -215,9 +215,24 @@ impl<T: BrainfuckCell> BrainfuckVM<T> {
     }
 }
 
-pub fn run_string<T: BrainfuckCell>(bf_str: &str) -> Result<(), BrainfuckExecutionError> {
+pub type BfResult = Result<(), BrainfuckExecutionError>;
+
+pub fn run_string<T: BrainfuckCell>(bf_str: &str) -> BfResult {
     let program: Program = bf_str.into();
     let mut vm = BrainfuckVM::<T>::new(16);
 
     vm.run_program(&program)
+}
+
+pub fn run_file<T: BrainfuckCell>(file: &mut File) -> BfResult {
+    let mut program_str = String::new();
+    file.read_to_string(&mut program_str)?;
+
+    run_string::<T>(&program_str)
+}
+
+pub fn run_from_path<T: BrainfuckCell>(path: &Path) -> BfResult {
+    let mut file = File::open(path)?;
+
+    run_file::<T>(&mut file)
 }
