@@ -1,4 +1,4 @@
-use std::{fs::File, io::{self, Read}, path::Path};
+use std::{fs::File, io::{self, Read}, marker::PhantomData, path::Path};
 use num::{traits::{WrappingAdd, WrappingSub}, Unsigned};
 
 #[derive(Clone, Copy, Debug)]
@@ -49,9 +49,43 @@ impl From<&str> for Program {
 pub trait BrainfuckCell: Unsigned + Copy + Default + TryInto<u32> + From<u8> + WrappingAdd + WrappingSub {}
 impl<T: Unsigned + Copy + Default + TryInto<u32> + From<u8> + WrappingAdd + WrappingSub> BrainfuckCell for T {}
 
-struct BrainfuckVM<T: BrainfuckCell> {
+pub struct BrainfuckVM<T: BrainfuckCell> {
     data_ptr: usize,
     data: Vec<T>
+}
+
+pub struct VMBuilder<T: BrainfuckCell = u8> {
+    initial_size: usize,
+    phantom: PhantomData<T>
+}
+
+impl VMBuilder {
+    pub fn new() -> VMBuilder {
+        VMBuilder {
+            initial_size: 0,
+            phantom: PhantomData::default()
+        }
+    }
+}
+
+impl<T: BrainfuckCell> VMBuilder<T> {
+    pub fn with_cell_type<U: BrainfuckCell>(self) -> VMBuilder<U> {
+        VMBuilder {
+            initial_size: self.initial_size,
+            phantom: PhantomData::default()
+        }
+    }
+
+    pub fn with_preallocated_cells(self, num_preallocated: usize) -> VMBuilder<T> {
+        VMBuilder {
+            initial_size: num_preallocated,
+            ..self
+        }
+    }
+
+    pub fn build(self) -> BrainfuckVM<T> {
+        BrainfuckVM::new(self.initial_size)
+    }
 }
 
 #[derive(Debug)]
@@ -217,22 +251,23 @@ impl<T: BrainfuckCell> BrainfuckVM<T> {
 
 pub type BfResult = Result<(), BrainfuckExecutionError>;
 
-pub fn run_string<T: BrainfuckCell>(bf_str: &str) -> BfResult {
-    let program: Program = bf_str.into();
-    let mut vm = BrainfuckVM::<T>::new(16);
+impl<T: BrainfuckCell> BrainfuckVM<T> {
+    pub fn run_string(&mut self, bf_str: &str) -> BfResult {
+        let program: Program = bf_str.into();
 
-    vm.run_program(&program)
-}
+        self.run_program(&program)
+    }
 
-pub fn run_file<T: BrainfuckCell>(file: &mut File) -> BfResult {
-    let mut program_str = String::new();
-    file.read_to_string(&mut program_str)?;
+    pub fn run_file(&mut self, file: &mut File) -> BfResult {
+        let mut program_str = String::new();
+        file.read_to_string(&mut program_str)?;
 
-    run_string::<T>(&program_str)
-}
+        self.run_string(&program_str)
+    }
 
-pub fn run_from_path<T: BrainfuckCell>(path: &Path) -> BfResult {
-    let mut file = File::open(path)?;
+    pub fn run_from_path(&mut self, path: &Path) -> BfResult {
+        let mut file = File::open(path)?;
 
-    run_file::<T>(&mut file)
+        self.run_file(&mut file)
+    }
 }
