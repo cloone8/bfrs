@@ -1,23 +1,45 @@
 mod cli_args;
 
-use cpr_bf::{BrainfuckVM, DynamicAllocator};
+use std::process::ExitCode;
 
-fn main() {
-    let hello_world = "++++++++[>++++[>++>+++>+++>+<<<<-]>+>+>->>+[<]<-]>>.>---.+++++++..+++.>>.<-.<.+++.------.--------.>>+.>++.";
+use clap::Parser;
+use cli_args::CLIArgs;
+use cpr_bf::{BoundsCheckingStaticAllocator, DynamicAllocator, StaticAllocator, VMBuilder};
 
-    let mut vm = cpr_bf::VMBuilder::new()
-        .with_cell_type::<u64>()
-        .with_allocator::<DynamicAllocator>()
-        .with_preallocated_cells(16)
-        .build();
+macro_rules! assign_allocator_and_build {
+    ($args:expr, $builder:expr) => {
+        match $args {
+            cli_args::Allocator::Dynamic => $builder.with_allocator::<DynamicAllocator>().build(),
+            cli_args::Allocator::StaticChecked => $builder.with_allocator::<BoundsCheckingStaticAllocator>().build(),
+            cli_args::Allocator::StaticUnchecked => $builder.with_allocator::<StaticAllocator>().build(),
+        }
+    };
+}
 
-    vm.run_string(hello_world).unwrap();
+fn main() -> ExitCode {
+    let args = CLIArgs::parse();
 
-    // bfrs::run_string::<u16>(hello_world).unwrap();
+    simple_logger::init_with_level(args.verbosity.clone().into()).unwrap();
+    let vm_builder = VMBuilder::new()
+        .with_preallocated_cells(args.preallocated);
 
-    // bfrs::run_string::<u32>(hello_world).unwrap();
+    let mut vm = match args.cellsize {
+        cli_args::CellSize::U8 => assign_allocator_and_build!(args.allocator, vm_builder.with_cell_type::<u8>()),
+        cli_args::CellSize::U16 => assign_allocator_and_build!(args.allocator, vm_builder.with_cell_type::<u16>()),
+        cli_args::CellSize::U32 => assign_allocator_and_build!(args.allocator, vm_builder.with_cell_type::<u32>()),
+        cli_args::CellSize::U64 => assign_allocator_and_build!(args.allocator, vm_builder.with_cell_type::<u64>()),
+        cli_args::CellSize::U128 => assign_allocator_and_build!(args.allocator, vm_builder.with_cell_type::<u128>()),
+    };
 
-    // bfrs::run_string::<u64>(hello_world).unwrap();
+    // let mut vm = VMBuilder::new()
+    //     .with_cell_type::<u64>()
+    //     .with_allocator::<DynamicAllocator>()
+    //     .build();
 
-    // bfrs::run_string::<u128>(hello_world).unwrap();
+    if let Err(e) = vm.run_from_path(&args.filename) {
+        log::error!("Error during brainfuck execution: {}", e);
+        return ExitCode::FAILURE;
+    }
+
+    return ExitCode::SUCCESS
 }

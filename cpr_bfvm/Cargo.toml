@@ -11,3 +11,4 @@ edition.workspace = true
 log = { version = "0.4.21", features = ["std", "release_max_level_info"] }
 clap = { version = "4.5.2", features = ["derive"] }
 cpr_bf.workspace = true
+simple_logger = { version = "4.3.3", features = ["stderr"] }

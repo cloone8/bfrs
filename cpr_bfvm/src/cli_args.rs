@@ -1,15 +1,21 @@
+use std::path::PathBuf;
+
 use clap::{Parser, ValueEnum};
 
 #[derive(Parser, Debug)]
 #[command(author, about, version)]
 pub(crate) struct CLIArgs {
-    // CLI commands that will execute a thing and then exit
-    #[arg(long, default_value_t = false)]
-    pub list_backends: bool,
+    #[arg()]
+    pub filename: PathBuf,
 
-    // Runtime configuration options
-    #[arg(short, long)]
-    pub backend: Option<String>,
+    #[arg(value_enum, short, long, default_value_t = CellSize::U8)]
+    pub cellsize: CellSize,
+
+    #[arg(short, long, default_value_t = 16)]
+    pub preallocated: usize,
+
+    #[arg(value_enum, short, long, default_value_t = Allocator::Dynamic)]
+    pub allocator: Allocator,
 
     #[cfg(not(debug_assertions))]
     #[arg(value_enum, short, long, default_value_t = LogLevel::Warn)]
@@ -18,6 +24,22 @@ pub(crate) struct CLIArgs {
     #[cfg(debug_assertions)]
     #[arg(value_enum, short, long, default_value_t = LogLevel::Info)]
     pub verbosity: LogLevel,
+}
+
+#[derive(Debug, Clone, ValueEnum)]
+pub(crate) enum CellSize {
+    U8,
+    U16,
+    U32,
+    U64,
+    U128
+}
+
+#[derive(Debug, Clone, ValueEnum)]
+pub(crate) enum Allocator {
+    Dynamic,
+    StaticChecked,
+    StaticUnchecked
 }
 
 #[derive(Debug, Clone, ValueEnum)]

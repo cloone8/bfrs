@@ -1,4 +1,4 @@
-use std::{convert::{TryFrom, TryInto}, fs::File, io::{self, Read}, iter::repeat, marker::PhantomData, path::Path};
+use std::{convert::{TryFrom, TryInto}, fmt::Display, fs::File, io::{self, Read}, iter::repeat, marker::PhantomData, path::Path};
 use num::{traits::{WrappingAdd, WrappingSub}, Unsigned};
 
 #[derive(Clone, Copy, Debug)]
@@ -49,14 +49,31 @@ impl From<&str> for Program {
 pub trait BrainfuckCell: Unsigned + Copy + Default + TryInto<u32> + From<u8> + WrappingAdd + WrappingSub {}
 impl<T: Unsigned + Copy + Default + TryInto<u32> + From<u8> + WrappingAdd + WrappingSub> BrainfuckCell for T {}
 
+#[derive(Debug)]
+pub struct OutOfBoundsAccess {
+    pub capacity: usize,
+    pub access: usize
+}
+
+#[derive(Debug)]
+pub enum VMMemoryError {
+    OutOfBounds(OutOfBoundsAccess)
+}
+
+impl From<VMMemoryError> for BrainfuckExecutionError {
+    fn from(value: VMMemoryError) -> Self {
+        BrainfuckExecutionError::MemoryError(value)
+    }
+}
+
 pub trait BrainfuckAllocator {
-    fn ensure_capacity<T: BrainfuckCell>(data: &mut Vec<T>, min_size: usize) -> Result<(), ()>;
+    fn ensure_capacity<T: BrainfuckCell>(data: &mut Vec<T>, min_size: usize) -> Result<(), VMMemoryError>;
 }
 
 pub struct DynamicAllocator;
 
 impl BrainfuckAllocator for DynamicAllocator {
-    fn ensure_capacity<T: BrainfuckCell>(data: &mut Vec<T>, min_size: usize) -> Result<(), ()> {
+    fn ensure_capacity<T: BrainfuckCell>(data: &mut Vec<T>, min_size: usize) -> Result<(), VMMemoryError> {
         // Ensure we allocate the required amount of memory
         if data.len() < min_size {
             data.resize(min_size, T::default());
@@ -69,9 +86,9 @@ impl BrainfuckAllocator for DynamicAllocator {
 pub struct BoundsCheckingStaticAllocator;
 
 impl BrainfuckAllocator for BoundsCheckingStaticAllocator {
-    fn ensure_capacity<T: BrainfuckCell>(data: &mut Vec<T>, min_size: usize) -> Result<(), ()> {
+    fn ensure_capacity<T: BrainfuckCell>(data: &mut Vec<T>, min_size: usize) -> Result<(), VMMemoryError> {
         if min_size > data.len() {
-            Err(())
+            Err(VMMemoryError::OutOfBounds(OutOfBoundsAccess { capacity: data.len(), access: min_size }))
         } else {
             Ok(())
         }
@@ -81,7 +98,7 @@ impl BrainfuckAllocator for BoundsCheckingStaticAllocator {
 pub struct StaticAllocator;
 
 impl BrainfuckAllocator for StaticAllocator {
-    fn ensure_capacity<T: BrainfuckCell>(_: &mut Vec<T>, _: usize) -> Result<(), ()> {
+    fn ensure_capacity<T: BrainfuckCell>(_: &mut Vec<T>, _: usize) -> Result<(), VMMemoryError> {
         Ok(())
     }
 }
@@ -108,7 +125,7 @@ impl VMBuilder {
     }
 }
 
-impl<T: BrainfuckCell, A: BrainfuckAllocator> VMBuilder<T, A> {
+impl<T: BrainfuckCell + 'static, A: BrainfuckAllocator + 'static> VMBuilder<T, A> {
     pub fn with_cell_type<U: BrainfuckCell>(self) -> VMBuilder<U, A> {
         VMBuilder {
             initial_size: self.initial_size,
@@ -132,8 +149,8 @@ impl<T: BrainfuckCell, A: BrainfuckAllocator> VMBuilder<T, A> {
         }
     }
 
-    pub fn build(self) -> impl BrainfuckVM {
-        VirtualMachine::<T, A>::new(self.initial_size)
+    pub fn build(self) -> Box<dyn BrainfuckVM> {
+        Box::new(VirtualMachine::<T, A>::new(self.initial_size))
     }
 }
 
@@ -148,8 +165,32 @@ pub enum BrainfuckExecutionError {
     UnknownError,
     IOError(io::Error),
     BracketMismatchError(MissingKind),
+    MemoryError(VMMemoryError),
     DataPointerOverflow,
     DataPointerUnderflow,
+}
+
+impl Display for BrainfuckExecutionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BrainfuckExecutionError::UnknownError => write!(f, "Unknown error"),
+            BrainfuckExecutionError::IOError(e) => write!(f, "I/O Error: {}", e),
+            BrainfuckExecutionError::BracketMismatchError(MissingKind::Close) => write!(f, "Too few closing brackets"),
+            BrainfuckExecutionError::BracketMismatchError(MissingKind::Open) => write!(f, "Too few opening brackets"),
+            BrainfuckExecutionError::MemoryError(VMMemoryError::OutOfBounds(a)) => write!(f, "Out of bounds memory access at index {} (max size {})", a.access, a.capacity),
+            BrainfuckExecutionError::DataPointerOverflow => write!(f, "Data pointer overflow!"),
+            BrainfuckExecutionError::DataPointerUnderflow => write!(f, "Data pointer underflow!"),
+        }
+    }
+}
+
+impl std::error::Error for BrainfuckExecutionError {
+    fn cause(&self) -> Option<&dyn std::error::Error> {
+        match self {
+            BrainfuckExecutionError::IOError(e) => Some(e),
+            _ => None
+        }
+    }
 }
 
 impl From<()> for BrainfuckExecutionError {
