@@ -1,8 +1,11 @@
+use bfrs::{BrainfuckVM, DynamicAllocator};
+
 fn main() {
     let hello_world = "++++++++[>++++[>++>+++>+++>+<<<<-]>+>+>->>+[<]<-]>>.>---.+++++++..+++.>>.<-.<.+++.------.--------.>>+.>++.";
 
     let mut vm = bfrs::VMBuilder::new()
         .with_cell_type::<u64>()
+        .with_allocator::<DynamicAllocator>()
         .with_preallocated_cells(16)
         .build();
 

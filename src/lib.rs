@@ -1,4 +1,4 @@
-use std::{fs::File, io::{self, Read}, marker::PhantomData, path::Path};
+use std::{fs::File, io::{self, Read}, iter::repeat, marker::PhantomData, path::Path};
 use num::{traits::{WrappingAdd, WrappingSub}, Unsigned};
 
 #[derive(Clone, Copy, Debug)]
@@ -49,42 +49,91 @@ impl From<&str> for Program {
 pub trait BrainfuckCell: Unsigned + Copy + Default + TryInto<u32> + From<u8> + WrappingAdd + WrappingSub {}
 impl<T: Unsigned + Copy + Default + TryInto<u32> + From<u8> + WrappingAdd + WrappingSub> BrainfuckCell for T {}
 
-pub struct BrainfuckVM<T: BrainfuckCell> {
-    data_ptr: usize,
-    data: Vec<T>
+pub trait BrainfuckAllocator {
+    fn ensure_capacity<T: BrainfuckCell>(data: &mut Vec<T>, min_size: usize) -> Result<(), ()>;
 }
 
-pub struct VMBuilder<T: BrainfuckCell = u8> {
+pub struct DynamicAllocator;
+
+impl BrainfuckAllocator for DynamicAllocator {
+    fn ensure_capacity<T: BrainfuckCell>(data: &mut Vec<T>, min_size: usize) -> Result<(), ()> {
+        // Ensure we allocate the required amount of memory
+        if data.len() < min_size {
+            data.resize(min_size, T::default());
+        }
+
+        Ok(())
+    }
+}
+
+pub struct BoundsCheckingStaticAllocator;
+
+impl BrainfuckAllocator for BoundsCheckingStaticAllocator {
+    fn ensure_capacity<T: BrainfuckCell>(data: &mut Vec<T>, min_size: usize) -> Result<(), ()> {
+        if min_size > data.len() {
+            Err(())
+        } else {
+            Ok(())
+        }
+    }
+}
+
+pub struct StaticAllocator;
+
+impl BrainfuckAllocator for StaticAllocator {
+    fn ensure_capacity<T: BrainfuckCell>(_: &mut Vec<T>, _: usize) -> Result<(), ()> {
+        Ok(())
+    }
+}
+
+pub struct VirtualMachine<T: BrainfuckCell, A: BrainfuckAllocator> {
+    data_ptr: usize,
+    data: Vec<T>,
+    alloc: PhantomData<A>
+}
+
+pub struct VMBuilder<T: BrainfuckCell = u8, A: BrainfuckAllocator = DynamicAllocator> {
     initial_size: usize,
-    phantom: PhantomData<T>
+    celltype: PhantomData<T>,
+    allocator: PhantomData<A>
 }
 
 impl VMBuilder {
     pub fn new() -> VMBuilder {
         VMBuilder {
             initial_size: 0,
-            phantom: PhantomData::default()
+            celltype: PhantomData::default(),
+            allocator: PhantomData::default()
         }
     }
 }
 
-impl<T: BrainfuckCell> VMBuilder<T> {
-    pub fn with_cell_type<U: BrainfuckCell>(self) -> VMBuilder<U> {
+impl<T: BrainfuckCell, A: BrainfuckAllocator> VMBuilder<T, A> {
+    pub fn with_cell_type<U: BrainfuckCell>(self) -> VMBuilder<U, A> {
         VMBuilder {
             initial_size: self.initial_size,
-            phantom: PhantomData::default()
+            celltype: PhantomData::<U>::default(),
+            allocator: self.allocator
         }
     }
 
-    pub fn with_preallocated_cells(self, num_preallocated: usize) -> VMBuilder<T> {
+    pub fn with_allocator<U: BrainfuckAllocator>(self) -> VMBuilder<T, U> {
+        VMBuilder {
+            initial_size: self.initial_size,
+            celltype: self.celltype,
+            allocator: PhantomData::<U>::default()
+        }
+    }
+
+    pub fn with_preallocated_cells(self, num_preallocated: usize) -> VMBuilder<T, A> {
         VMBuilder {
             initial_size: num_preallocated,
             ..self
         }
     }
 
-    pub fn build(self) -> BrainfuckVM<T> {
-        BrainfuckVM::new(self.initial_size)
+    pub fn build(self) -> impl BrainfuckVM {
+        VirtualMachine::<T, A>::new(self.initial_size)
     }
 }
 
@@ -115,21 +164,13 @@ impl From<io::Error> for BrainfuckExecutionError {
     }
 }
 
-impl<T: BrainfuckCell> BrainfuckVM<T> {
+impl<T: BrainfuckCell, Alloc: BrainfuckAllocator> VirtualMachine<T, Alloc> {
     fn new(init_size: usize) -> Self {
-        BrainfuckVM {
+        VirtualMachine {
             data_ptr: 0,
-            data: Vec::with_capacity(init_size)
+            data: repeat(T::default()).take(init_size).collect(),
+            alloc: PhantomData::default()
         }
-    }
-
-    fn ensure_mem(&mut self, min_size: usize) -> Result<(), ()> {
-        // Ensure we allocate the required amount of memory
-        if self.data.len() < min_size {
-            self.data.resize(min_size, T::default());
-        }
-
-        Ok(())
     }
 
     fn exec(&mut self, instrs: &[Instruction], instr_ptr: usize) -> Result<usize, BrainfuckExecutionError> {
@@ -145,12 +186,12 @@ impl<T: BrainfuckCell> BrainfuckVM<T> {
                 Ok(instr_ptr + 1)
             }
             Instruction::Incr => {
-                self.ensure_mem(self.data_ptr + 1)?;
+                Alloc::ensure_capacity(&mut self.data, self.data_ptr + 1)?;
                 self.data[self.data_ptr] = self.data[self.data_ptr].wrapping_add(&T::one());
                 Ok(instr_ptr + 1)
             },
             Instruction::Decr => {
-                self.ensure_mem(self.data_ptr + 1)?;
+                Alloc::ensure_capacity(&mut self.data, self.data_ptr + 1)?;
                 self.data[self.data_ptr] = self.data[self.data_ptr].wrapping_sub(&T::one());
                 Ok(instr_ptr + 1)
             },
@@ -166,7 +207,7 @@ impl<T: BrainfuckCell> BrainfuckVM<T> {
                 let num_read = io::stdin().read(&mut buf)?;
 
                 if num_read == 1 {
-                    self.ensure_mem(self.data_ptr + 1)?;
+                    Alloc::ensure_capacity(&mut self.data, self.data_ptr + 1)?;
                     self.data[self.data_ptr] = buf[0].into();
                 }
 
@@ -233,7 +274,34 @@ impl<T: BrainfuckCell> BrainfuckVM<T> {
             },
         }
     }
+}
 
+pub type BfResult = Result<(), BrainfuckExecutionError>;
+
+pub trait BrainfuckVM {
+    fn run_program(&mut self, program: &Program) -> Result<(), BrainfuckExecutionError>;
+
+    fn run_string(&mut self, bf_str: &str) -> BfResult {
+        let program: Program = bf_str.into();
+
+        self.run_program(&program)
+    }
+
+    fn run_file(&mut self, file: &mut File) -> BfResult {
+        let mut program_str = String::new();
+        file.read_to_string(&mut program_str)?;
+
+        self.run_string(&program_str)
+    }
+
+    fn run_from_path(&mut self, path: &Path) -> BfResult {
+        let mut file = File::open(path)?;
+
+        self.run_file(&mut file)
+    }
+}
+
+impl<T: BrainfuckCell, A: BrainfuckAllocator> BrainfuckVM for VirtualMachine<T, A> {
     fn run_program(&mut self, program: &Program) -> Result<(), BrainfuckExecutionError> {
         if program.instructions.len() == 0 {
             return Ok(());
@@ -246,28 +314,5 @@ impl<T: BrainfuckCell> BrainfuckVM<T> {
         }
 
         Ok(())
-    }
-}
-
-pub type BfResult = Result<(), BrainfuckExecutionError>;
-
-impl<T: BrainfuckCell> BrainfuckVM<T> {
-    pub fn run_string(&mut self, bf_str: &str) -> BfResult {
-        let program: Program = bf_str.into();
-
-        self.run_program(&program)
-    }
-
-    pub fn run_file(&mut self, file: &mut File) -> BfResult {
-        let mut program_str = String::new();
-        file.read_to_string(&mut program_str)?;
-
-        self.run_string(&program_str)
-    }
-
-    pub fn run_from_path(&mut self, path: &Path) -> BfResult {
-        let mut file = File::open(path)?;
-
-        self.run_file(&mut file)
     }
 }
