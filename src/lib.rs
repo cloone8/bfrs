@@ -1,4 +1,5 @@
 use std::io::{self, Read};
+use num::{traits::{WrappingAdd, WrappingSub}, Unsigned};
 
 #[derive(Clone, Copy, Debug)]
 pub enum Instruction {
@@ -45,9 +46,12 @@ impl From<&str> for Program {
     }
 }
 
-struct BrainfuckVM {
+pub trait BrainfuckCell: Unsigned + Copy + Default + TryInto<u32> + From<u8> + WrappingAdd + WrappingSub {}
+impl<T: Unsigned + Copy + Default + TryInto<u32> + From<u8> + WrappingAdd + WrappingSub> BrainfuckCell for T {}
+
+struct BrainfuckVM<T: BrainfuckCell> {
     data_ptr: usize,
-    data: Vec<u8>
+    data: Vec<T>
 }
 
 #[derive(Debug)]
@@ -77,7 +81,7 @@ impl From<io::Error> for BrainfuckExecutionError {
     }
 }
 
-impl BrainfuckVM {
+impl<T: BrainfuckCell> BrainfuckVM<T> {
     fn new(init_size: usize) -> Self {
         BrainfuckVM {
             data_ptr: 0,
@@ -88,7 +92,7 @@ impl BrainfuckVM {
     fn ensure_mem(&mut self, min_size: usize) -> Result<(), ()> {
         // Ensure we allocate the required amount of memory
         if self.data.len() < min_size {
-            self.data.resize(min_size, 0);
+            self.data.resize(min_size, T::default());
         }
 
         Ok(())
@@ -108,17 +112,19 @@ impl BrainfuckVM {
             }
             Instruction::Incr => {
                 self.ensure_mem(self.data_ptr + 1)?;
-                self.data[self.data_ptr] = self.data[self.data_ptr].wrapping_add(1);
+                self.data[self.data_ptr] = self.data[self.data_ptr].wrapping_add(&T::one());
                 Ok(instr_ptr + 1)
             },
             Instruction::Decr => {
                 self.ensure_mem(self.data_ptr + 1)?;
-                self.data[self.data_ptr] = self.data[self.data_ptr].wrapping_sub(1);
+                self.data[self.data_ptr] = self.data[self.data_ptr].wrapping_sub(&T::one());
                 Ok(instr_ptr + 1)
             },
             Instruction::Output => {
-                let val: char = self.data.get(self.data_ptr).cloned().unwrap_or(0).into();
-                print!("{}", val);
+                let val = self.data.get(self.data_ptr).cloned().unwrap_or_default();
+                let as_char: char = val.try_into().ok().map(char::from_u32).flatten().unwrap_or(char::REPLACEMENT_CHARACTER);
+
+                print!("{}", as_char);
                 Ok(instr_ptr + 1)
             },
             Instruction::Input => {
@@ -127,15 +133,15 @@ impl BrainfuckVM {
 
                 if num_read == 1 {
                     self.ensure_mem(self.data_ptr + 1)?;
-                    self.data[self.data_ptr] = buf[0];
+                    self.data[self.data_ptr] = buf[0].into();
                 }
 
                 Ok(instr_ptr + 1)
             },
             Instruction::JumpFwd => {
-                let val = self.data.get(self.data_ptr).cloned().unwrap_or(0);
+                let val = self.data.get(self.data_ptr).cloned().unwrap_or_default();
 
-                if val != 0 {
+                if val != T::zero() {
                     return Ok(instr_ptr + 1);
                 }
 
@@ -161,9 +167,9 @@ impl BrainfuckVM {
                 Err(BrainfuckExecutionError::BracketMismatchError(MissingKind::Close))
             },
             Instruction::JumpBack => {
-                let val = self.data.get(self.data_ptr).cloned().unwrap_or(0);
+                let val = self.data.get(self.data_ptr).cloned().unwrap_or_default();
 
-                if val == 0 {
+                if val == T::zero() {
                     return Ok(instr_ptr + 1);
                 }
 
@@ -209,9 +215,9 @@ impl BrainfuckVM {
     }
 }
 
-pub fn run_string(bf_str: &str) -> Result<(), BrainfuckExecutionError> {
+pub fn run_string<T: BrainfuckCell>(bf_str: &str) -> Result<(), BrainfuckExecutionError> {
     let program: Program = bf_str.into();
-    let mut vm = BrainfuckVM::new(16);
+    let mut vm = BrainfuckVM::<T>::new(16);
 
     vm.run_program(&program)
 }
