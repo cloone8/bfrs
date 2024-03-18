@@ -32,14 +32,14 @@ pub(crate) enum CellSize {
     U16,
     U32,
     U64,
-    U128
+    U128,
 }
 
 #[derive(Debug, Clone, ValueEnum)]
 pub(crate) enum Allocator {
     Dynamic,
     StaticChecked,
-    StaticUnchecked
+    StaticUnchecked,
 }
 
 #[derive(Debug, Clone, ValueEnum)]

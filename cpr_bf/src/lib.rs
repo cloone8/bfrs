@@ -1,5 +1,16 @@
-use std::{convert::{TryFrom, TryInto}, fmt::Display, fs::File, io::{self, Read}, iter::repeat, marker::PhantomData, path::Path};
-use num::{traits::{WrappingAdd, WrappingSub}, Unsigned};
+use num::{
+    traits::{WrappingAdd, WrappingSub},
+    Unsigned,
+};
+use std::{
+    convert::{TryFrom, TryInto},
+    fmt::Display,
+    fs::File,
+    io::{self, Read},
+    iter::repeat,
+    marker::PhantomData,
+    path::Path,
+};
 
 #[derive(Clone, Copy, Debug)]
 pub enum Instruction {
@@ -27,18 +38,18 @@ impl TryFrom<char> for Instruction {
             '[' => Ok(Instruction::JumpFwd),
             ']' => Ok(Instruction::JumpBack),
             _ => Err(()),
-
         }
     }
 }
 
 pub struct Program {
-    instructions: Vec<Instruction>
+    instructions: Vec<Instruction>,
 }
 
 impl From<&str> for Program {
     fn from(input: &str) -> Self {
-        let instructions = input.chars()
+        let instructions = input
+            .chars()
             .filter_map(|c| Instruction::try_from(c).ok())
             .collect();
 
@@ -46,18 +57,24 @@ impl From<&str> for Program {
     }
 }
 
-pub trait BrainfuckCell: Unsigned + Copy + Default + TryInto<u32> + From<u8> + WrappingAdd + WrappingSub {}
-impl<T: Unsigned + Copy + Default + TryInto<u32> + From<u8> + WrappingAdd + WrappingSub> BrainfuckCell for T {}
+pub trait BrainfuckCell:
+    Unsigned + Copy + Default + TryInto<u32> + From<u8> + WrappingAdd + WrappingSub
+{
+}
+impl<T: Unsigned + Copy + Default + TryInto<u32> + From<u8> + WrappingAdd + WrappingSub>
+    BrainfuckCell for T
+{
+}
 
 #[derive(Debug)]
 pub struct OutOfBoundsAccess {
     pub capacity: usize,
-    pub access: usize
+    pub access: usize,
 }
 
 #[derive(Debug)]
 pub enum VMMemoryError {
-    OutOfBounds(OutOfBoundsAccess)
+    OutOfBounds(OutOfBoundsAccess),
 }
 
 impl From<VMMemoryError> for BrainfuckExecutionError {
@@ -67,13 +84,19 @@ impl From<VMMemoryError> for BrainfuckExecutionError {
 }
 
 pub trait BrainfuckAllocator {
-    fn ensure_capacity<T: BrainfuckCell>(data: &mut Vec<T>, min_size: usize) -> Result<(), VMMemoryError>;
+    fn ensure_capacity<T: BrainfuckCell>(
+        data: &mut Vec<T>,
+        min_size: usize,
+    ) -> Result<(), VMMemoryError>;
 }
 
 pub struct DynamicAllocator;
 
 impl BrainfuckAllocator for DynamicAllocator {
-    fn ensure_capacity<T: BrainfuckCell>(data: &mut Vec<T>, min_size: usize) -> Result<(), VMMemoryError> {
+    fn ensure_capacity<T: BrainfuckCell>(
+        data: &mut Vec<T>,
+        min_size: usize,
+    ) -> Result<(), VMMemoryError> {
         // Ensure we allocate the required amount of memory
         if data.len() < min_size {
             data.resize(min_size, T::default());
@@ -86,9 +109,15 @@ impl BrainfuckAllocator for DynamicAllocator {
 pub struct BoundsCheckingStaticAllocator;
 
 impl BrainfuckAllocator for BoundsCheckingStaticAllocator {
-    fn ensure_capacity<T: BrainfuckCell>(data: &mut Vec<T>, min_size: usize) -> Result<(), VMMemoryError> {
+    fn ensure_capacity<T: BrainfuckCell>(
+        data: &mut Vec<T>,
+        min_size: usize,
+    ) -> Result<(), VMMemoryError> {
         if min_size > data.len() {
-            Err(VMMemoryError::OutOfBounds(OutOfBoundsAccess { capacity: data.len(), access: min_size }))
+            Err(VMMemoryError::OutOfBounds(OutOfBoundsAccess {
+                capacity: data.len(),
+                access: min_size,
+            }))
         } else {
             Ok(())
         }
@@ -106,21 +135,27 @@ impl BrainfuckAllocator for StaticAllocator {
 pub struct VirtualMachine<T: BrainfuckCell, A: BrainfuckAllocator> {
     data_ptr: usize,
     data: Vec<T>,
-    alloc: PhantomData<A>
+    alloc: PhantomData<A>,
 }
 
 pub struct VMBuilder<T: BrainfuckCell = u8, A: BrainfuckAllocator = DynamicAllocator> {
     initial_size: usize,
     celltype: PhantomData<T>,
-    allocator: PhantomData<A>
+    allocator: PhantomData<A>,
 }
 
 impl VMBuilder {
     pub fn new() -> VMBuilder {
+        VMBuilder::default()
+    }
+}
+
+impl Default for VMBuilder {
+    fn default() -> Self {
         VMBuilder {
             initial_size: 0,
-            celltype: PhantomData::default(),
-            allocator: PhantomData::default()
+            celltype: PhantomData,
+            allocator: PhantomData,
         }
     }
 }
@@ -129,8 +164,8 @@ impl<T: BrainfuckCell + 'static, A: BrainfuckAllocator + 'static> VMBuilder<T, A
     pub fn with_cell_type<U: BrainfuckCell>(self) -> VMBuilder<U, A> {
         VMBuilder {
             initial_size: self.initial_size,
-            celltype: PhantomData::<U>::default(),
-            allocator: self.allocator
+            celltype: PhantomData::<U>,
+            allocator: self.allocator,
         }
     }
 
@@ -138,7 +173,7 @@ impl<T: BrainfuckCell + 'static, A: BrainfuckAllocator + 'static> VMBuilder<T, A
         VMBuilder {
             initial_size: self.initial_size,
             celltype: self.celltype,
-            allocator: PhantomData::<U>::default()
+            allocator: PhantomData::<U>,
         }
     }
 
@@ -157,7 +192,7 @@ impl<T: BrainfuckCell + 'static, A: BrainfuckAllocator + 'static> VMBuilder<T, A
 #[derive(Debug)]
 pub enum MissingKind {
     Open,
-    Close
+    Close,
 }
 
 #[derive(Debug)]
@@ -175,9 +210,17 @@ impl Display for BrainfuckExecutionError {
         match self {
             BrainfuckExecutionError::UnknownError => write!(f, "Unknown error"),
             BrainfuckExecutionError::IOError(e) => write!(f, "I/O Error: {}", e),
-            BrainfuckExecutionError::BracketMismatchError(MissingKind::Close) => write!(f, "Too few closing brackets"),
-            BrainfuckExecutionError::BracketMismatchError(MissingKind::Open) => write!(f, "Too few opening brackets"),
-            BrainfuckExecutionError::MemoryError(VMMemoryError::OutOfBounds(a)) => write!(f, "Out of bounds memory access at index {} (max size {})", a.access, a.capacity),
+            BrainfuckExecutionError::BracketMismatchError(MissingKind::Close) => {
+                write!(f, "Too few closing brackets")
+            }
+            BrainfuckExecutionError::BracketMismatchError(MissingKind::Open) => {
+                write!(f, "Too few opening brackets")
+            }
+            BrainfuckExecutionError::MemoryError(VMMemoryError::OutOfBounds(a)) => write!(
+                f,
+                "Out of bounds memory access at index {} (max size {})",
+                a.access, a.capacity
+            ),
             BrainfuckExecutionError::DataPointerOverflow => write!(f, "Data pointer overflow!"),
             BrainfuckExecutionError::DataPointerUnderflow => write!(f, "Data pointer underflow!"),
         }
@@ -188,7 +231,7 @@ impl std::error::Error for BrainfuckExecutionError {
     fn cause(&self) -> Option<&dyn std::error::Error> {
         match self {
             BrainfuckExecutionError::IOError(e) => Some(e),
-            _ => None
+            _ => None,
         }
     }
 }
@@ -210,39 +253,53 @@ impl<T: BrainfuckCell, Alloc: BrainfuckAllocator> VirtualMachine<T, Alloc> {
         VirtualMachine {
             data_ptr: 0,
             data: repeat(T::default()).take(init_size).collect(),
-            alloc: PhantomData::default()
+            alloc: PhantomData,
         }
     }
 
-    fn exec(&mut self, instrs: &[Instruction], instr_ptr: usize) -> Result<usize, BrainfuckExecutionError> {
+    fn exec(
+        &mut self,
+        instrs: &[Instruction],
+        instr_ptr: usize,
+    ) -> Result<usize, BrainfuckExecutionError> {
         let instr = instrs[instr_ptr];
 
         match instr {
             Instruction::IncrDP => {
-                self.data_ptr = self.data_ptr.checked_add(1).ok_or(BrainfuckExecutionError::DataPointerOverflow)?;
+                self.data_ptr = self
+                    .data_ptr
+                    .checked_add(1)
+                    .ok_or(BrainfuckExecutionError::DataPointerOverflow)?;
                 Ok(instr_ptr + 1)
             }
             Instruction::DecrDP => {
-                self.data_ptr = self.data_ptr.checked_sub(1).ok_or(BrainfuckExecutionError::DataPointerUnderflow)?;
+                self.data_ptr = self
+                    .data_ptr
+                    .checked_sub(1)
+                    .ok_or(BrainfuckExecutionError::DataPointerUnderflow)?;
                 Ok(instr_ptr + 1)
             }
             Instruction::Incr => {
                 Alloc::ensure_capacity(&mut self.data, self.data_ptr + 1)?;
                 self.data[self.data_ptr] = self.data[self.data_ptr].wrapping_add(&T::one());
                 Ok(instr_ptr + 1)
-            },
+            }
             Instruction::Decr => {
                 Alloc::ensure_capacity(&mut self.data, self.data_ptr + 1)?;
                 self.data[self.data_ptr] = self.data[self.data_ptr].wrapping_sub(&T::one());
                 Ok(instr_ptr + 1)
-            },
+            }
             Instruction::Output => {
                 let val = self.data.get(self.data_ptr).cloned().unwrap_or_default();
-                let as_char: char = val.try_into().ok().map(char::from_u32).flatten().unwrap_or(char::REPLACEMENT_CHARACTER);
+                let as_char: char = val
+                    .try_into()
+                    .ok()
+                    .and_then(char::from_u32)
+                    .unwrap_or(char::REPLACEMENT_CHARACTER);
 
                 print!("{}", as_char);
                 Ok(instr_ptr + 1)
-            },
+            }
             Instruction::Input => {
                 let mut buf = [0_u8; 1];
                 let num_read = io::stdin().read(&mut buf)?;
@@ -253,7 +310,7 @@ impl<T: BrainfuckCell, Alloc: BrainfuckAllocator> VirtualMachine<T, Alloc> {
                 }
 
                 Ok(instr_ptr + 1)
-            },
+            }
             Instruction::JumpFwd => {
                 let val = self.data.get(self.data_ptr).cloned().unwrap_or_default();
 
@@ -265,7 +322,6 @@ impl<T: BrainfuckCell, Alloc: BrainfuckAllocator> VirtualMachine<T, Alloc> {
                 let mut tag_stack: usize = 1;
 
                 while closing_tag < instrs.len() {
-
                     match instrs[closing_tag] {
                         Instruction::JumpFwd => tag_stack += 1,
                         Instruction::JumpBack => {
@@ -273,15 +329,17 @@ impl<T: BrainfuckCell, Alloc: BrainfuckAllocator> VirtualMachine<T, Alloc> {
                             if tag_stack == 0 {
                                 return Ok(closing_tag);
                             }
-                        },
+                        }
                         _ => {}
                     }
 
                     closing_tag += 1;
                 }
 
-                Err(BrainfuckExecutionError::BracketMismatchError(MissingKind::Close))
-            },
+                Err(BrainfuckExecutionError::BracketMismatchError(
+                    MissingKind::Close,
+                ))
+            }
             Instruction::JumpBack => {
                 let val = self.data.get(self.data_ptr).cloned().unwrap_or_default();
 
@@ -290,7 +348,9 @@ impl<T: BrainfuckCell, Alloc: BrainfuckAllocator> VirtualMachine<T, Alloc> {
                 }
 
                 if instr_ptr == 0 {
-                    return Err(BrainfuckExecutionError::BracketMismatchError(MissingKind::Open))
+                    return Err(BrainfuckExecutionError::BracketMismatchError(
+                        MissingKind::Open,
+                    ));
                 }
 
                 let mut opening_tag = instr_ptr - 1;
@@ -303,7 +363,7 @@ impl<T: BrainfuckCell, Alloc: BrainfuckAllocator> VirtualMachine<T, Alloc> {
                             if tag_stack == 0 {
                                 return Ok(opening_tag);
                             }
-                        },
+                        }
                         Instruction::JumpBack => tag_stack += 1,
                         _ => {}
                     }
@@ -311,8 +371,10 @@ impl<T: BrainfuckCell, Alloc: BrainfuckAllocator> VirtualMachine<T, Alloc> {
                     opening_tag -= 1;
                 }
 
-                Err(BrainfuckExecutionError::BracketMismatchError(MissingKind::Open))
-            },
+                Err(BrainfuckExecutionError::BracketMismatchError(
+                    MissingKind::Open,
+                ))
+            }
         }
     }
 }
@@ -344,7 +406,7 @@ pub trait BrainfuckVM {
 
 impl<T: BrainfuckCell, A: BrainfuckAllocator> BrainfuckVM for VirtualMachine<T, A> {
     fn run_program(&mut self, program: &Program) -> Result<(), BrainfuckExecutionError> {
-        if program.instructions.len() == 0 {
+        if program.instructions.is_empty() {
             return Ok(());
         }
 
