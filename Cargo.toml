@@ -6,10 +6,10 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.3"
+version = "0.1.4"
 authors = ["Wouter de Bruijn <wouter@wutru.io>"]
 homepage = "https://github.com/cloone8/bfrs"
 edition = "2021"
 
 [workspace.dependencies]
-cpr_bf = { path = "cpr_bf", version = "0.1.3" }
+cpr_bf = { path = "cpr_bf", version = "0.1.4" }
