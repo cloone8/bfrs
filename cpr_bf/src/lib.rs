@@ -1,3 +1,5 @@
+//! A simple Brainfuck interpretation library
+
 use num::{
     traits::{WrappingAdd, WrappingSub},
     Unsigned,
@@ -6,7 +8,7 @@ use std::{
     convert::{TryFrom, TryInto},
     fmt::Display,
     fs::File,
-    io::{self, Read},
+    io::{self, stdin, stdout, Read, Stdin, Stdout, Write},
     iter::repeat,
     marker::PhantomData,
     path::Path,
@@ -132,16 +134,25 @@ impl BrainfuckAllocator for StaticAllocator {
     }
 }
 
-pub struct VirtualMachine<T: BrainfuckCell, A: BrainfuckAllocator> {
+pub struct VirtualMachine<T: BrainfuckCell, A: BrainfuckAllocator, R: Read, W: Write> {
     data_ptr: usize,
     data: Vec<T>,
     alloc: PhantomData<A>,
+    reader: R,
+    writer: W,
 }
 
-pub struct VMBuilder<T: BrainfuckCell = u8, A: BrainfuckAllocator = DynamicAllocator> {
+pub struct VMBuilder<
+    T: BrainfuckCell = u8,
+    A: BrainfuckAllocator = DynamicAllocator,
+    R: Read = Stdin,
+    W: Write = Stdout,
+> {
     initial_size: usize,
     celltype: PhantomData<T>,
     allocator: PhantomData<A>,
+    reader: R,
+    writer: W,
 }
 
 impl VMBuilder {
@@ -156,36 +167,68 @@ impl Default for VMBuilder {
             initial_size: 0,
             celltype: PhantomData,
             allocator: PhantomData,
+            reader: stdin(),
+            writer: stdout(),
         }
     }
 }
 
-impl<T: BrainfuckCell + 'static, A: BrainfuckAllocator + 'static> VMBuilder<T, A> {
-    pub fn with_cell_type<U: BrainfuckCell>(self) -> VMBuilder<U, A> {
+impl<T: BrainfuckCell + 'static, A: BrainfuckAllocator + 'static, R: Read, W: Write>
+    VMBuilder<T, A, R, W>
+{
+    pub fn with_cell_type<U: BrainfuckCell>(self) -> VMBuilder<U, A, R, W> {
         VMBuilder {
             initial_size: self.initial_size,
             celltype: PhantomData::<U>,
             allocator: self.allocator,
+            reader: self.reader,
+            writer: self.writer,
         }
     }
 
-    pub fn with_allocator<U: BrainfuckAllocator>(self) -> VMBuilder<T, U> {
+    pub fn with_allocator<U: BrainfuckAllocator>(self) -> VMBuilder<T, U, R, W> {
         VMBuilder {
             initial_size: self.initial_size,
             celltype: self.celltype,
             allocator: PhantomData::<U>,
+            reader: self.reader,
+            writer: self.writer,
         }
     }
 
-    pub fn with_preallocated_cells(self, num_preallocated: usize) -> VMBuilder<T, A> {
+    pub fn with_preallocated_cells(self, num_preallocated: usize) -> VMBuilder<T, A, R, W> {
         VMBuilder {
             initial_size: num_preallocated,
             ..self
         }
     }
 
+    pub fn with_reader<U: Read>(self, reader: U) -> VMBuilder<T, A, U, W> {
+        VMBuilder {
+            initial_size: self.initial_size,
+            celltype: self.celltype,
+            allocator: self.allocator,
+            reader,
+            writer: self.writer,
+        }
+    }
+
+    pub fn with_writer<U: Write>(self, writer: U) -> VMBuilder<T, A, R, U> {
+        VMBuilder {
+            initial_size: self.initial_size,
+            celltype: self.celltype,
+            allocator: self.allocator,
+            reader: self.reader,
+            writer,
+        }
+    }
+
     pub fn build(self) -> Box<dyn BrainfuckVM> {
-        Box::new(VirtualMachine::<T, A>::new(self.initial_size))
+        Box::new(VirtualMachine::<T, A, Stdin, Stdout>::new(
+            self.initial_size,
+            stdin(),
+            stdout(),
+        ))
     }
 }
 
@@ -248,12 +291,16 @@ impl From<io::Error> for BrainfuckExecutionError {
     }
 }
 
-impl<T: BrainfuckCell, Alloc: BrainfuckAllocator> VirtualMachine<T, Alloc> {
-    fn new(init_size: usize) -> Self {
+impl<T: BrainfuckCell, Alloc: BrainfuckAllocator, R: Read, W: Write>
+    VirtualMachine<T, Alloc, R, W>
+{
+    fn new(init_size: usize, reader: R, writer: W) -> Self {
         VirtualMachine {
             data_ptr: 0,
             data: repeat(T::default()).take(init_size).collect(),
             alloc: PhantomData,
+            reader,
+            writer,
         }
     }
 
@@ -296,13 +343,12 @@ impl<T: BrainfuckCell, Alloc: BrainfuckAllocator> VirtualMachine<T, Alloc> {
                     .ok()
                     .and_then(char::from_u32)
                     .unwrap_or(char::REPLACEMENT_CHARACTER);
-
-                print!("{}", as_char);
+                write!(self.writer, "{}", as_char)?;
                 Ok(instr_ptr + 1)
             }
             Instruction::Input => {
                 let mut buf = [0_u8; 1];
-                let num_read = io::stdin().read(&mut buf)?;
+                let num_read = self.reader.read(&mut buf)?;
 
                 if num_read == 1 {
                     Alloc::ensure_capacity(&mut self.data, self.data_ptr + 1)?;
@@ -404,7 +450,9 @@ pub trait BrainfuckVM {
     }
 }
 
-impl<T: BrainfuckCell, A: BrainfuckAllocator> BrainfuckVM for VirtualMachine<T, A> {
+impl<T: BrainfuckCell, A: BrainfuckAllocator, R: Read, W: Write> BrainfuckVM
+    for VirtualMachine<T, A, R, W>
+{
     fn run_program(&mut self, program: &Program) -> Result<(), BrainfuckExecutionError> {
         if program.instructions.is_empty() {
             return Ok(());
@@ -415,6 +463,8 @@ impl<T: BrainfuckCell, A: BrainfuckAllocator> BrainfuckVM for VirtualMachine<T, 
         while instr_ptr < program.instructions.len() {
             instr_ptr = self.exec(&program.instructions, instr_ptr)?;
         }
+
+        self.writer.flush()?;
 
         Ok(())
     }
