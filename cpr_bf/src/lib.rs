@@ -26,12 +26,14 @@ use num::{
     Unsigned,
 };
 use std::{
+    any::type_name,
     convert::{TryFrom, TryInto},
     fmt::Display,
     fs::File,
     io::{self, stdin, stdout, Read, Stdin, Stdout, Write},
     iter::repeat,
     marker::PhantomData,
+    os::windows::fs::MetadataExt,
     path::Path,
 };
 
@@ -107,12 +109,20 @@ impl From<&str> for Program {
 /// a Brainfuck VM. Can be implemented manually (although not recommended), but is
 /// already implemented for the default unsigned int types ([`u8`], [`u16`], etc.)
 pub trait BrainfuckCell:
-    Unsigned + Copy + Default + TryInto<u32> + From<u8> + WrappingAdd + WrappingSub
+    Unsigned + Copy + Default + TryInto<u32> + From<u8> + WrappingAdd + WrappingSub + std::fmt::Debug
 {
 }
 
-impl<T: Unsigned + Copy + Default + TryInto<u32> + From<u8> + WrappingAdd + WrappingSub>
-    BrainfuckCell for T
+impl<
+        T: Unsigned
+            + Copy
+            + Default
+            + TryInto<u32>
+            + From<u8>
+            + WrappingAdd
+            + WrappingSub
+            + std::fmt::Debug,
+    > BrainfuckCell for T
 {
 }
 
@@ -200,6 +210,22 @@ impl Default for VMBuilder {
     }
 }
 
+impl<T: BrainfuckCell, A: BrainfuckAllocator, R: Read, W: Write> Display for VMBuilder<T, A, R, W> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "VMBuilder<{}, {}, {}, {}> with initial size {}",
+            type_name::<T>(),
+            type_name::<A>(),
+            type_name::<R>(),
+            type_name::<W>(),
+            self.initial_size
+        )?;
+
+        Ok(())
+    }
+}
+
 impl<T: BrainfuckCell + 'static, A: BrainfuckAllocator + 'static, R: Read, W: Write>
     VMBuilder<T, A, R, W>
 {
@@ -260,6 +286,8 @@ impl<T: BrainfuckCell + 'static, A: BrainfuckAllocator + 'static, R: Read, W: Wr
     /// Builds the [`BrainfuckVM`] with the currently
     /// stored configuration of this builder
     pub fn build(self) -> Box<dyn BrainfuckVM> {
+        log::info!("Building Brainfuck VM with configuration: {}", self);
+
         Box::new(VirtualMachine::<T, A, Stdin, Stdout>::new(
             self.initial_size,
             stdin(),
@@ -268,11 +296,11 @@ impl<T: BrainfuckCell + 'static, A: BrainfuckAllocator + 'static, R: Read, W: Wr
     }
 }
 
-/// The kind of missing bracket
+/// The kind of missing jump instruction
 #[derive(Debug)]
 pub enum MissingKind {
-    Open,
-    Close,
+    JumpFwd,
+    JumpBack,
 }
 
 /// A fatal error encountered by the Brainfuck VM during program execution.
@@ -284,8 +312,8 @@ pub enum BrainfuckExecutionError {
     /// An error during input or output
     IOError(io::Error),
 
-    /// Mismatched brackets
-    BracketMismatchError(MissingKind),
+    /// Mismatched jump instructions
+    JumpMismatchError(MissingKind),
 
     /// An error during memory allocation or access
     MemoryError(VMMemoryError),
@@ -302,10 +330,10 @@ impl Display for BrainfuckExecutionError {
         match self {
             BrainfuckExecutionError::UnknownError => write!(f, "Unknown error"),
             BrainfuckExecutionError::IOError(e) => write!(f, "I/O Error: {}", e),
-            BrainfuckExecutionError::BracketMismatchError(MissingKind::Close) => {
+            BrainfuckExecutionError::JumpMismatchError(MissingKind::JumpBack) => {
                 write!(f, "Too few closing brackets")
             }
-            BrainfuckExecutionError::BracketMismatchError(MissingKind::Open) => {
+            BrainfuckExecutionError::JumpMismatchError(MissingKind::JumpFwd) => {
                 write!(f, "Too few opening brackets")
             }
             BrainfuckExecutionError::MemoryError(VMMemoryError::OutOfBounds(a)) => write!(
@@ -360,48 +388,89 @@ impl<T: BrainfuckCell, Alloc: BrainfuckAllocator, R: Read, W: Write>
     ) -> Result<usize, BrainfuckExecutionError> {
         let instr = instrs[instr_ptr];
 
+        log::debug!("Executing instruction {}: {:?}", instr_ptr, instr);
+
         match instr {
             Instruction::IncrDP => {
+                log::trace!("Old data pointer: {}", self.data_ptr);
+
                 self.data_ptr = self
                     .data_ptr
                     .checked_add(1)
                     .ok_or(BrainfuckExecutionError::DataPointerOverflow)?;
+
+                log::trace!("New data pointer: {}", self.data_ptr);
+
                 Ok(instr_ptr + 1)
             }
             Instruction::DecrDP => {
+                log::trace!("Old data pointer: {}", self.data_ptr);
+
                 self.data_ptr = self
                     .data_ptr
                     .checked_sub(1)
                     .ok_or(BrainfuckExecutionError::DataPointerUnderflow)?;
+
+                log::trace!("New data pointer: {}", self.data_ptr);
+
                 Ok(instr_ptr + 1)
             }
             Instruction::Incr => {
+                log::trace!("Incrementing cell {}", self.data_ptr);
+
                 Alloc::ensure_capacity(&mut self.data, self.data_ptr + 1)?;
+
+                log::trace!("Previous value: {:?}", self.data[self.data_ptr]);
                 self.data[self.data_ptr] = self.data[self.data_ptr].wrapping_add(&T::one());
+                log::trace!("New value: {:?}", self.data[self.data_ptr]);
+
                 Ok(instr_ptr + 1)
             }
             Instruction::Decr => {
+                log::trace!("Decrementing cell {}", self.data_ptr);
+
                 Alloc::ensure_capacity(&mut self.data, self.data_ptr + 1)?;
+
+                log::trace!("Previous value: {:?}", self.data[self.data_ptr]);
                 self.data[self.data_ptr] = self.data[self.data_ptr].wrapping_sub(&T::one());
+                log::trace!("New value: {:?}", self.data[self.data_ptr]);
+
                 Ok(instr_ptr + 1)
             }
             Instruction::Output => {
+                log::trace!("Outputting value at cell {}", self.data_ptr);
+
                 let val = self.data.get(self.data_ptr).cloned().unwrap_or_default();
                 let as_char: char = val
                     .try_into()
                     .ok()
                     .and_then(char::from_u32)
                     .unwrap_or(char::REPLACEMENT_CHARACTER);
+
+                log::trace!("Found value: {:?}, as char: {}", val, as_char);
+
                 write!(self.writer, "{}", as_char)?;
+
                 Ok(instr_ptr + 1)
             }
             Instruction::Input => {
+                log::trace!("Reading input into cell {}", self.data_ptr);
+
                 let mut buf = [0_u8; 1];
                 let num_read = self.reader.read(&mut buf)?;
 
                 if num_read == 1 {
+                    log::trace!("Read byte: {}", buf[0]);
+
                     Alloc::ensure_capacity(&mut self.data, self.data_ptr + 1)?;
-                    self.data[self.data_ptr] = buf[0].into();
+
+                    let conv_buf: T = buf[0].into();
+
+                    log::trace!("Converted to cell type: {:?}", conv_buf);
+
+                    self.data[self.data_ptr] = conv_buf;
+                } else {
+                    log::info!("Attempted to read input, but no input was available");
                 }
 
                 Ok(instr_ptr + 1)
@@ -410,18 +479,37 @@ impl<T: BrainfuckCell, Alloc: BrainfuckAllocator, R: Read, W: Write>
                 let val = self.data.get(self.data_ptr).cloned().unwrap_or_default();
 
                 if val != T::zero() {
+                    log::trace!(
+                        "Value at cell {} is not zero, not jumping forward",
+                        self.data_ptr
+                    );
                     return Ok(instr_ptr + 1);
                 }
+
+                log::trace!("Value at cell {} is zero, jumping forward", self.data_ptr);
 
                 let mut closing_tag = instr_ptr + 1;
                 let mut tag_stack: usize = 1;
 
                 while closing_tag < instrs.len() {
                     match instrs[closing_tag] {
-                        Instruction::JumpFwd => tag_stack += 1,
+                        Instruction::JumpFwd => {
+                            log::trace!(
+                                "Encountered additional JumpFwd, increasing tag stack {}=>{}",
+                                tag_stack,
+                                tag_stack + 1
+                            );
+                            tag_stack += 1
+                        }
                         Instruction::JumpBack => {
+                            log::trace!(
+                                "Encountered JumpBack, decreasing tag stack {}=>{}",
+                                tag_stack,
+                                tag_stack - 1
+                            );
                             tag_stack -= 1;
                             if tag_stack == 0 {
+                                log::trace!("Found matching JumpBack at {}", closing_tag);
                                 return Ok(closing_tag);
                             }
                         }
@@ -431,20 +519,25 @@ impl<T: BrainfuckCell, Alloc: BrainfuckAllocator, R: Read, W: Write>
                     closing_tag += 1;
                 }
 
-                Err(BrainfuckExecutionError::BracketMismatchError(
-                    MissingKind::Close,
+                log::error!("No matching JumpBack found for JumpFwd at {}", instr_ptr);
+
+                Err(BrainfuckExecutionError::JumpMismatchError(
+                    MissingKind::JumpBack,
                 ))
             }
             Instruction::JumpBack => {
                 let val = self.data.get(self.data_ptr).cloned().unwrap_or_default();
 
                 if val == T::zero() {
+                    log::trace!("Value at cell {} is zero, not jumping back", self.data_ptr);
                     return Ok(instr_ptr + 1);
                 }
 
                 if instr_ptr == 0 {
-                    return Err(BrainfuckExecutionError::BracketMismatchError(
-                        MissingKind::Open,
+                    log::error!("Instruction pointer is already 0, no matching opening bracket can be found");
+
+                    return Err(BrainfuckExecutionError::JumpMismatchError(
+                        MissingKind::JumpFwd,
                     ));
                 }
 
@@ -454,20 +547,35 @@ impl<T: BrainfuckCell, Alloc: BrainfuckAllocator, R: Read, W: Write>
                 while opening_tag > 0 {
                     match instrs[opening_tag] {
                         Instruction::JumpFwd => {
+                            log::trace!(
+                                "Encountered JumpFwd, decreasing tag stack {}=>{}",
+                                tag_stack,
+                                tag_stack - 1
+                            );
                             tag_stack -= 1;
                             if tag_stack == 0 {
+                                log::trace!("Found matching JumpFwd at {}", opening_tag);
                                 return Ok(opening_tag);
                             }
                         }
-                        Instruction::JumpBack => tag_stack += 1,
+                        Instruction::JumpBack => {
+                            log::trace!(
+                                "Encountered additional JumpBack, increasing tag stack {}=>{}",
+                                tag_stack,
+                                tag_stack + 1
+                            );
+                            tag_stack += 1
+                        }
                         _ => {}
                     }
 
                     opening_tag -= 1;
                 }
 
-                Err(BrainfuckExecutionError::BracketMismatchError(
-                    MissingKind::Open,
+                log::error!("No matching JumpFwd found for JumpBack at {}", instr_ptr);
+
+                Err(BrainfuckExecutionError::JumpMismatchError(
+                    MissingKind::JumpFwd,
                 ))
             }
         }
@@ -501,6 +609,8 @@ pub trait BrainfuckVM {
     /// Compiles and runs the given string of Brainfuck source code.
     /// See [`BrainfuckVM::run_program`]
     fn run_string(&mut self, bf_str: &str) -> BfResult {
+        log::info!("Running string of {} bytes", bf_str.len());
+
         let program: Program = bf_str.into();
 
         self.run_program(&program)
@@ -511,6 +621,14 @@ pub trait BrainfuckVM {
     ///
     /// See [`BrainfuckVM::run_string`]
     fn run_file(&mut self, file: &mut File) -> BfResult {
+        log::info!(
+            "Running file of size {}",
+            file.metadata()
+                .ok()
+                .map(|meta| meta.file_size().to_string())
+                .unwrap_or("{unknown size}".to_owned())
+        );
+
         let mut program_str = String::new();
         file.read_to_string(&mut program_str)?;
 
@@ -522,6 +640,8 @@ pub trait BrainfuckVM {
     ///
     /// See [`BrainfuckVM::run_file`]
     fn run_from_path(&mut self, path: &Path) -> BfResult {
+        log::info!("Running program at path {:?}", path);
+
         let mut file = File::open(path)?;
 
         self.run_file(&mut file)
@@ -532,11 +652,16 @@ impl<T: BrainfuckCell, A: BrainfuckAllocator, R: Read, W: Write> BrainfuckVM
     for VirtualMachine<T, A, R, W>
 {
     fn reset_memory(&mut self) {
+        log::info!("Resetting VM memory cells");
+
         self.data.iter_mut().for_each(|cell| *cell = T::default());
     }
 
     fn run_program(&mut self, program: &Program) -> Result<(), BrainfuckExecutionError> {
+        log::info!("Running program");
+
         if program.instructions.is_empty() {
+            log::info!("Program empty, returning");
             return Ok(());
         }
 
@@ -547,6 +672,7 @@ impl<T: BrainfuckCell, A: BrainfuckAllocator, R: Read, W: Write> BrainfuckVM
             instr_ptr = self.exec(&program.instructions, instr_ptr)?;
         }
 
+        log::debug!("Flushing writer");
         self.writer.flush()?;
 
         Ok(())

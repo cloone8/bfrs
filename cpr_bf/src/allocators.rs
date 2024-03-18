@@ -12,8 +12,11 @@ impl BrainfuckAllocator for DynamicAllocator {
         data: &mut Vec<T>,
         min_size: usize,
     ) -> Result<(), VMMemoryError> {
+        log::trace!("ensure_capacity {} in DynamicAllocator", min_size);
+
         // Ensure we allocate the required amount of memory
         if data.len() < min_size {
+            log::trace!("Expanding amount of cells to {}", min_size);
             data.resize(min_size, T::default());
         }
 
@@ -32,7 +35,18 @@ impl BrainfuckAllocator for BoundsCheckingStaticAllocator {
         data: &mut Vec<T>,
         min_size: usize,
     ) -> Result<(), VMMemoryError> {
+        log::trace!(
+            "ensure_capacity {} in BoundsCheckingStaticAllocator",
+            min_size
+        );
+
         if min_size > data.len() {
+            log::info!(
+                "Detected possible out-of-bounds access at index {} (current capacity: {})",
+                min_size - 1,
+                data.len()
+            );
+
             Err(VMMemoryError::OutOfBounds(OutOfBoundsAccess {
                 capacity: data.len(),
                 access: min_size,
@@ -52,7 +66,12 @@ impl BrainfuckAllocator for BoundsCheckingStaticAllocator {
 pub struct StaticAllocator;
 
 impl BrainfuckAllocator for StaticAllocator {
-    fn ensure_capacity<T: BrainfuckCell>(_: &mut Vec<T>, _: usize) -> Result<(), VMMemoryError> {
+    fn ensure_capacity<T: BrainfuckCell>(
+        _: &mut Vec<T>,
+        min_size: usize,
+    ) -> Result<(), VMMemoryError> {
+        log::trace!("ensure_capacity {} in StaticAllocator", min_size);
+
         Ok(())
     }
 }
