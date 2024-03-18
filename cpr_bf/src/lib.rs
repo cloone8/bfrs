@@ -1,5 +1,26 @@
 //! A simple Brainfuck interpretation library
+//!
+//! The library exposes the [`BrainfuckVM`] trait, representing an object
+//! that is able to run Brainfuck programs either from source code represented
+//! as a string, or from a Brainfuck source file.
+//!
+//! In addition to this general trait, it also provides the [`VMBuilder`] struct,
+//! that can be used to create a Brainfuck VM that is customizable through various
+//! means.
+//!
+//! # Examples
+//!
+//! To simply create a basic spec-compliant Brainfuck runner, and run some Brainfuck code:
+//! ```
+//! let code = "++++++++[>++++[>++>+++>+++>+<<<<-]>+>+>->>+[<]<-]>>.>---.+++++++..+++.>>.<-.<.+++.------.--------.>>+.>++.";
+//!
+//! let vm = cpr_bf::VMBuilder::new().build();
+//! vm.run_string(code);
+//! ```
 
+pub mod allocators;
+
+use allocators::DynamicAllocator;
 use num::{
     traits::{WrappingAdd, WrappingSub},
     Unsigned,
@@ -14,15 +35,31 @@ use std::{
     path::Path,
 };
 
+/// Represents a single Brainfuck instruction
 #[derive(Clone, Copy, Debug)]
 pub enum Instruction {
+    /// Increment the current data pointer by one
     IncrDP,
+
+    /// Decrement the current data pointer by one
     DecrDP,
+
+    /// Increment the value in the cell that the data pointer currently points to by one
     Incr,
+
+    /// Decrements the value in the cell that the data pointer currently points to by one
     Decr,
+
+    /// Writes the value in the cell that the data pointer currently points to, to the VM writer
     Output,
+
+    /// Reads one byte from the VM reader and stores it in the cell that the data pointer currently points to
     Input,
+
+    /// If the value in the currently pointed-to cell is zero, jumps forwards to the next matching [`Instruction::JumpBack`] instruction.
     JumpFwd,
+
+    /// If the value in the currently pointer-to cell is not zero, jumps backwards to the previous matching [`Instruction::JumpFwd`] instruction.
     JumpBack,
 }
 
@@ -44,6 +81,13 @@ impl TryFrom<char> for Instruction {
     }
 }
 
+/// Struct representing a complete Brainfuck program.
+/// The program does not need to be constructed directly,
+/// and is instead constructed automatically through the various `run_*` methods
+/// defined on the [`BrainfuckVM`] trait.
+///
+/// If desired, however, one can be constructed through the [`From<&str>`] trait
+/// implementation defined for [`Program`]
 pub struct Program {
     instructions: Vec<Instruction>,
 }
@@ -59,23 +103,35 @@ impl From<&str> for Program {
     }
 }
 
+/// This trait defines types that can be used as the datatype for a single cell of
+/// a Brainfuck VM. Can be implemented manually (although not recommended), but is
+/// already implemented for the default unsigned int types ([`u8`], [`u16`], etc.)
 pub trait BrainfuckCell:
     Unsigned + Copy + Default + TryInto<u32> + From<u8> + WrappingAdd + WrappingSub
 {
 }
+
 impl<T: Unsigned + Copy + Default + TryInto<u32> + From<u8> + WrappingAdd + WrappingSub>
     BrainfuckCell for T
 {
 }
 
+/// An out-of-bounds access error returned by the
+/// Brainfuck VM if an access is attempted outside the
+/// allocated memory region, without dynamic allocation being enabled
 #[derive(Debug)]
 pub struct OutOfBoundsAccess {
+    /// The current maximum capacity of the VM, in number of cells
     pub capacity: usize,
+
+    /// The index of the attempted access
     pub access: usize,
 }
 
+/// A general memory error encountered during runtime by the VM
 #[derive(Debug)]
 pub enum VMMemoryError {
+    /// An out-of-bounds access
     OutOfBounds(OutOfBoundsAccess),
 }
 
@@ -85,56 +141,22 @@ impl From<VMMemoryError> for BrainfuckExecutionError {
     }
 }
 
+/// A trait representing an object that is capable of
+/// allocating memory for a Brainfuck VM
 pub trait BrainfuckAllocator {
+    /// Ensures that `data` has at least `min_size` cells available for
+    /// both reading and writing. If this function returns [`Result::Ok`],
+    /// `data[min_size - 1]` can be safely read from and written to.
+    ///
+    /// Any new cells created by this function shall be initialized
+    /// to the default value of `T`
     fn ensure_capacity<T: BrainfuckCell>(
         data: &mut Vec<T>,
         min_size: usize,
     ) -> Result<(), VMMemoryError>;
 }
 
-pub struct DynamicAllocator;
-
-impl BrainfuckAllocator for DynamicAllocator {
-    fn ensure_capacity<T: BrainfuckCell>(
-        data: &mut Vec<T>,
-        min_size: usize,
-    ) -> Result<(), VMMemoryError> {
-        // Ensure we allocate the required amount of memory
-        if data.len() < min_size {
-            data.resize(min_size, T::default());
-        }
-
-        Ok(())
-    }
-}
-
-pub struct BoundsCheckingStaticAllocator;
-
-impl BrainfuckAllocator for BoundsCheckingStaticAllocator {
-    fn ensure_capacity<T: BrainfuckCell>(
-        data: &mut Vec<T>,
-        min_size: usize,
-    ) -> Result<(), VMMemoryError> {
-        if min_size > data.len() {
-            Err(VMMemoryError::OutOfBounds(OutOfBoundsAccess {
-                capacity: data.len(),
-                access: min_size,
-            }))
-        } else {
-            Ok(())
-        }
-    }
-}
-
-pub struct StaticAllocator;
-
-impl BrainfuckAllocator for StaticAllocator {
-    fn ensure_capacity<T: BrainfuckCell>(_: &mut Vec<T>, _: usize) -> Result<(), VMMemoryError> {
-        Ok(())
-    }
-}
-
-pub struct VirtualMachine<T: BrainfuckCell, A: BrainfuckAllocator, R: Read, W: Write> {
+struct VirtualMachine<T: BrainfuckCell, A: BrainfuckAllocator, R: Read, W: Write> {
     data_ptr: usize,
     data: Vec<T>,
     alloc: PhantomData<A>,
@@ -142,6 +164,9 @@ pub struct VirtualMachine<T: BrainfuckCell, A: BrainfuckAllocator, R: Read, W: W
     writer: W,
 }
 
+/// A builder struct for the default implementation of [`BrainfuckVM`]
+/// Create the default configuration with [`VMBuilder::new()`] or [`VMBuilder::default()`],
+/// customize with the member functions, and build the final VM with [`VMBuilder::build()`]
 pub struct VMBuilder<
     T: BrainfuckCell = u8,
     A: BrainfuckAllocator = DynamicAllocator,
@@ -156,12 +181,14 @@ pub struct VMBuilder<
 }
 
 impl VMBuilder {
+    /// Construct a new VMBuilder with the default initial configuration
     pub fn new() -> VMBuilder {
         VMBuilder::default()
     }
 }
 
 impl Default for VMBuilder {
+    /// Construct a new VMBuilder with the default initial configuration
     fn default() -> Self {
         VMBuilder {
             initial_size: 0,
@@ -176,6 +203,7 @@ impl Default for VMBuilder {
 impl<T: BrainfuckCell + 'static, A: BrainfuckAllocator + 'static, R: Read, W: Write>
     VMBuilder<T, A, R, W>
 {
+    /// Changes the type of the memory cells to `U`
     pub fn with_cell_type<U: BrainfuckCell>(self) -> VMBuilder<U, A, R, W> {
         VMBuilder {
             initial_size: self.initial_size,
@@ -186,6 +214,7 @@ impl<T: BrainfuckCell + 'static, A: BrainfuckAllocator + 'static, R: Read, W: Wr
         }
     }
 
+    /// Changes the used allocator to `U`
     pub fn with_allocator<U: BrainfuckAllocator>(self) -> VMBuilder<T, U, R, W> {
         VMBuilder {
             initial_size: self.initial_size,
@@ -196,6 +225,7 @@ impl<T: BrainfuckCell + 'static, A: BrainfuckAllocator + 'static, R: Read, W: Wr
         }
     }
 
+    /// Changes the amount of pre-allocated cells to `num_preallocated`
     pub fn with_preallocated_cells(self, num_preallocated: usize) -> VMBuilder<T, A, R, W> {
         VMBuilder {
             initial_size: num_preallocated,
@@ -203,6 +233,8 @@ impl<T: BrainfuckCell + 'static, A: BrainfuckAllocator + 'static, R: Read, W: Wr
         }
     }
 
+    /// Changes the reader used by the VM as input for the running Brainfuck
+    /// programs to `reader`
     pub fn with_reader<U: Read>(self, reader: U) -> VMBuilder<T, A, U, W> {
         VMBuilder {
             initial_size: self.initial_size,
@@ -213,6 +245,8 @@ impl<T: BrainfuckCell + 'static, A: BrainfuckAllocator + 'static, R: Read, W: Wr
         }
     }
 
+    /// Changes the writer used by the VM as output for the running Brainfuck programs
+    /// to `writer`
     pub fn with_writer<U: Write>(self, writer: U) -> VMBuilder<T, A, R, U> {
         VMBuilder {
             initial_size: self.initial_size,
@@ -223,6 +257,8 @@ impl<T: BrainfuckCell + 'static, A: BrainfuckAllocator + 'static, R: Read, W: Wr
         }
     }
 
+    /// Builds the [`BrainfuckVM`] with the currently
+    /// stored configuration of this builder
     pub fn build(self) -> Box<dyn BrainfuckVM> {
         Box::new(VirtualMachine::<T, A, Stdin, Stdout>::new(
             self.initial_size,
@@ -232,19 +268,32 @@ impl<T: BrainfuckCell + 'static, A: BrainfuckAllocator + 'static, R: Read, W: Wr
     }
 }
 
+/// The kind of missing bracket
 #[derive(Debug)]
 pub enum MissingKind {
     Open,
     Close,
 }
 
+/// A fatal error encountered by the Brainfuck VM during program execution.
 #[derive(Debug)]
 pub enum BrainfuckExecutionError {
+    /// An unknown error
     UnknownError,
+
+    /// An error during input or output
     IOError(io::Error),
+
+    /// Mismatched brackets
     BracketMismatchError(MissingKind),
+
+    /// An error during memory allocation or access
     MemoryError(VMMemoryError),
+
+    /// Overflow in the data pointer
     DataPointerOverflow,
+
+    /// Underflow in the data pointer
     DataPointerUnderflow,
 }
 
@@ -425,17 +474,42 @@ impl<T: BrainfuckCell, Alloc: BrainfuckAllocator, R: Read, W: Write>
     }
 }
 
+/// The result of the execution of a Brainfuck program
 pub type BfResult = Result<(), BrainfuckExecutionError>;
 
+/// This trait represents an object that is able to
+/// run Brainfuck programs, either from a string
+/// of Brainfuck source code or by reading a Brainfuck source file
+///
+/// A default implementation can be constructed using [`VMBuilder`]
 pub trait BrainfuckVM {
-    fn run_program(&mut self, program: &Program) -> Result<(), BrainfuckExecutionError>;
+    /// Runs the given Brainfuck program on this VM.
+    /// After the program has been run, the memory of the VM
+    /// is *not* automatically reset back to zero. (see [`BrainfuckVM::reset_memory`])
+    ///
+    /// Note that the VM might not be new, so the VM must take
+    /// care of resetting the data pointer back to zero before
+    /// running the program
+    fn run_program(&mut self, program: &Program) -> BfResult;
 
+    /// Resets all currently allocated memory cells back to their default
+    /// value, as if no program has been run on the VM before.
+    /// This does not free any cells that were allocated during the execution
+    /// of any previous Brainfuck programs.
+    fn reset_memory(&mut self);
+
+    /// Compiles and runs the given string of Brainfuck source code.
+    /// See [`BrainfuckVM::run_program`]
     fn run_string(&mut self, bf_str: &str) -> BfResult {
         let program: Program = bf_str.into();
 
         self.run_program(&program)
     }
 
+    /// Reads the given file into a string, and
+    /// runs the string on this VM.
+    ///
+    /// See [`BrainfuckVM::run_string`]
     fn run_file(&mut self, file: &mut File) -> BfResult {
         let mut program_str = String::new();
         file.read_to_string(&mut program_str)?;
@@ -443,6 +517,10 @@ pub trait BrainfuckVM {
         self.run_string(&program_str)
     }
 
+    /// Opens the file pointed to by the given path,
+    /// and attempts to run its contents on this VM.
+    ///
+    /// See [`BrainfuckVM::run_file`]
     fn run_from_path(&mut self, path: &Path) -> BfResult {
         let mut file = File::open(path)?;
 
@@ -453,11 +531,16 @@ pub trait BrainfuckVM {
 impl<T: BrainfuckCell, A: BrainfuckAllocator, R: Read, W: Write> BrainfuckVM
     for VirtualMachine<T, A, R, W>
 {
+    fn reset_memory(&mut self) {
+        self.data.iter_mut().for_each(|cell| *cell = T::default());
+    }
+
     fn run_program(&mut self, program: &Program) -> Result<(), BrainfuckExecutionError> {
         if program.instructions.is_empty() {
             return Ok(());
         }
 
+        self.data_ptr = 0;
         let mut instr_ptr = 0;
 
         while instr_ptr < program.instructions.len() {

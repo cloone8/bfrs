@@ -4,7 +4,8 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use cli_args::CLIArgs;
-use cpr_bf::{BoundsCheckingStaticAllocator, DynamicAllocator, StaticAllocator, VMBuilder};
+use cpr_bf::allocators::*;
+use cpr_bf::VMBuilder;
 
 macro_rules! assign_allocator_and_build {
     ($args:expr, $builder:expr) => {
