@@ -469,7 +469,7 @@ impl<T: BrainfuckCell, Alloc: BrainfuckAllocator, R: Read, W: Write>
 
                     self.data[self.data_ptr] = conv_buf;
                 } else {
-                    log::info!("Attempted to read input, but no input was available");
+                    log::debug!("Attempted to read input, but no input was available");
                 }
 
                 Ok(instr_ptr + 1)
