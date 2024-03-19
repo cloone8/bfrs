@@ -33,7 +33,6 @@ use std::{
     io::{self, stdin, stdout, Read, Stdin, Stdout, Write},
     iter::repeat,
     marker::PhantomData,
-    os::windows::fs::MetadataExt,
     path::Path,
 };
 
@@ -625,7 +624,7 @@ pub trait BrainfuckVM {
             "Running file of size {}",
             file.metadata()
                 .ok()
-                .map(|meta| meta.file_size().to_string())
+                .map(|meta| meta.len().to_string())
                 .unwrap_or("{unknown size}".to_owned())
         );
 
