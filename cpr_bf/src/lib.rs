@@ -225,8 +225,12 @@ impl<T: BrainfuckCell, A: BrainfuckAllocator, R: Read, W: Write> Display for VMB
     }
 }
 
-impl<T: BrainfuckCell + 'static, A: BrainfuckAllocator + 'static, R: Read + 'static, W: Write + 'static>
-    VMBuilder<T, A, R, W>
+impl<
+        T: BrainfuckCell + 'static,
+        A: BrainfuckAllocator + 'static,
+        R: Read + 'static,
+        W: Write + 'static,
+    > VMBuilder<T, A, R, W>
 {
     /// Changes the type of the memory cells to `U`
     pub fn with_cell_type<U: BrainfuckCell>(self) -> VMBuilder<U, A, R, W> {
@@ -367,6 +371,8 @@ impl From<io::Error> for BrainfuckExecutionError {
     }
 }
 
+type ExecResult = Result<usize, BrainfuckExecutionError>;
+
 impl<T: BrainfuckCell, Alloc: BrainfuckAllocator, R: Read, W: Write>
     VirtualMachine<T, Alloc, R, W>
 {
@@ -380,6 +386,203 @@ impl<T: BrainfuckCell, Alloc: BrainfuckAllocator, R: Read, W: Write>
         }
     }
 
+    fn exec_incrdp(&mut self, instr_ptr: usize) -> ExecResult {
+        log::trace!("Old data pointer: {}", self.data_ptr);
+
+        self.data_ptr = self
+            .data_ptr
+            .checked_add(1)
+            .ok_or(BrainfuckExecutionError::DataPointerOverflow)?;
+
+        log::trace!("New data pointer: {}", self.data_ptr);
+
+        Ok(instr_ptr + 1)
+    }
+
+    fn exec_decrdp(&mut self, instr_ptr: usize) -> ExecResult {
+        log::trace!("Old data pointer: {}", self.data_ptr);
+
+        self.data_ptr = self
+            .data_ptr
+            .checked_sub(1)
+            .ok_or(BrainfuckExecutionError::DataPointerUnderflow)?;
+
+        log::trace!("New data pointer: {}", self.data_ptr);
+
+        Ok(instr_ptr + 1)
+    }
+
+    fn exec_incr(&mut self, instr_ptr: usize) -> ExecResult {
+        log::trace!("Incrementing cell {}", self.data_ptr);
+
+        Alloc::ensure_capacity(&mut self.data, self.data_ptr + 1)?;
+
+        log::trace!("Previous value: {:?}", self.data[self.data_ptr]);
+        self.data[self.data_ptr] = self.data[self.data_ptr].wrapping_add(&T::one());
+        log::trace!("New value: {:?}", self.data[self.data_ptr]);
+
+        Ok(instr_ptr + 1)
+    }
+
+    fn exec_decr(&mut self, instr_ptr: usize) -> ExecResult {
+        log::trace!("Decrementing cell {}", self.data_ptr);
+
+        Alloc::ensure_capacity(&mut self.data, self.data_ptr + 1)?;
+
+        log::trace!("Previous value: {:?}", self.data[self.data_ptr]);
+        self.data[self.data_ptr] = self.data[self.data_ptr].wrapping_sub(&T::one());
+        log::trace!("New value: {:?}", self.data[self.data_ptr]);
+
+        Ok(instr_ptr + 1)
+    }
+
+    fn exec_output(&mut self, instr_ptr: usize) -> ExecResult {
+        log::trace!("Outputting value at cell {}", self.data_ptr);
+
+        let val = self.data.get(self.data_ptr).cloned().unwrap_or_default();
+        let as_char: char = val
+            .try_into()
+            .ok()
+            .and_then(char::from_u32)
+            .unwrap_or(char::REPLACEMENT_CHARACTER);
+
+        log::trace!("Found value: {:?}, as char: {}", val, as_char);
+
+        write!(self.writer, "{}", as_char)?;
+
+        Ok(instr_ptr + 1)
+    }
+
+    fn exec_input(&mut self, instr_ptr: usize) -> ExecResult {
+        log::trace!("Reading input into cell {}", self.data_ptr);
+
+        let mut buf = [0_u8; 1];
+        let num_read = self.reader.read(&mut buf)?;
+
+        if num_read == 1 {
+            log::trace!("Read byte: {}", buf[0]);
+
+            Alloc::ensure_capacity(&mut self.data, self.data_ptr + 1)?;
+
+            let conv_buf: T = buf[0].into();
+
+            log::trace!("Converted to cell type: {:?}", conv_buf);
+
+            self.data[self.data_ptr] = conv_buf;
+        } else {
+            log::debug!("Attempted to read input, but no input was available");
+        }
+
+        Ok(instr_ptr + 1)
+    }
+
+    fn exec_jumpfwd(&mut self, instr_ptr: usize, instrs: &[Instruction]) -> ExecResult {
+        let val = self.data.get(self.data_ptr).cloned().unwrap_or_default();
+
+        if val != T::zero() {
+            log::trace!(
+                "Value at cell {} is not zero, not jumping forward",
+                self.data_ptr
+            );
+            return Ok(instr_ptr + 1);
+        }
+
+        log::trace!("Value at cell {} is zero, jumping forward", self.data_ptr);
+
+        let mut closing_tag = instr_ptr + 1;
+        let mut tag_stack: usize = 1;
+
+        while closing_tag < instrs.len() {
+            match instrs[closing_tag] {
+                Instruction::JumpFwd => {
+                    log::trace!(
+                        "Encountered additional JumpFwd, increasing tag stack {}=>{}",
+                        tag_stack,
+                        tag_stack + 1
+                    );
+                    tag_stack += 1
+                }
+                Instruction::JumpBack => {
+                    log::trace!(
+                        "Encountered JumpBack, decreasing tag stack {}=>{}",
+                        tag_stack,
+                        tag_stack - 1
+                    );
+                    tag_stack -= 1;
+                    if tag_stack == 0 {
+                        log::trace!("Found matching JumpBack at {}", closing_tag);
+                        return Ok(closing_tag);
+                    }
+                }
+                _ => {}
+            }
+
+            closing_tag += 1;
+        }
+
+        log::error!("No matching JumpBack found for JumpFwd at {}", instr_ptr);
+
+        Err(BrainfuckExecutionError::JumpMismatchError(
+            MissingKind::JumpBack,
+        ))
+    }
+
+    fn exec_jumpback(&mut self, instr_ptr: usize, instrs: &[Instruction]) -> ExecResult {
+        let val = self.data.get(self.data_ptr).cloned().unwrap_or_default();
+
+        if val == T::zero() {
+            log::trace!("Value at cell {} is zero, not jumping back", self.data_ptr);
+            return Ok(instr_ptr + 1);
+        }
+
+        if instr_ptr == 0 {
+            log::error!(
+                "Instruction pointer is already 0, no matching opening bracket can be found"
+            );
+
+            return Err(BrainfuckExecutionError::JumpMismatchError(
+                MissingKind::JumpFwd,
+            ));
+        }
+
+        let mut opening_tag = instr_ptr - 1;
+        let mut tag_stack: usize = 1;
+
+        while opening_tag > 0 {
+            match instrs[opening_tag] {
+                Instruction::JumpFwd => {
+                    log::trace!(
+                        "Encountered JumpFwd, decreasing tag stack {}=>{}",
+                        tag_stack,
+                        tag_stack - 1
+                    );
+                    tag_stack -= 1;
+                    if tag_stack == 0 {
+                        log::trace!("Found matching JumpFwd at {}", opening_tag);
+                        return Ok(opening_tag);
+                    }
+                }
+                Instruction::JumpBack => {
+                    log::trace!(
+                        "Encountered additional JumpBack, increasing tag stack {}=>{}",
+                        tag_stack,
+                        tag_stack + 1
+                    );
+                    tag_stack += 1
+                }
+                _ => {}
+            }
+
+            opening_tag -= 1;
+        }
+
+        log::error!("No matching JumpFwd found for JumpBack at {}", instr_ptr);
+
+        Err(BrainfuckExecutionError::JumpMismatchError(
+            MissingKind::JumpFwd,
+        ))
+    }
+
     fn exec(
         &mut self,
         instrs: &[Instruction],
@@ -390,193 +593,14 @@ impl<T: BrainfuckCell, Alloc: BrainfuckAllocator, R: Read, W: Write>
         log::debug!("Executing instruction {}: {:?}", instr_ptr, instr);
 
         match instr {
-            Instruction::IncrDP => {
-                log::trace!("Old data pointer: {}", self.data_ptr);
-
-                self.data_ptr = self
-                    .data_ptr
-                    .checked_add(1)
-                    .ok_or(BrainfuckExecutionError::DataPointerOverflow)?;
-
-                log::trace!("New data pointer: {}", self.data_ptr);
-
-                Ok(instr_ptr + 1)
-            }
-            Instruction::DecrDP => {
-                log::trace!("Old data pointer: {}", self.data_ptr);
-
-                self.data_ptr = self
-                    .data_ptr
-                    .checked_sub(1)
-                    .ok_or(BrainfuckExecutionError::DataPointerUnderflow)?;
-
-                log::trace!("New data pointer: {}", self.data_ptr);
-
-                Ok(instr_ptr + 1)
-            }
-            Instruction::Incr => {
-                log::trace!("Incrementing cell {}", self.data_ptr);
-
-                Alloc::ensure_capacity(&mut self.data, self.data_ptr + 1)?;
-
-                log::trace!("Previous value: {:?}", self.data[self.data_ptr]);
-                self.data[self.data_ptr] = self.data[self.data_ptr].wrapping_add(&T::one());
-                log::trace!("New value: {:?}", self.data[self.data_ptr]);
-
-                Ok(instr_ptr + 1)
-            }
-            Instruction::Decr => {
-                log::trace!("Decrementing cell {}", self.data_ptr);
-
-                Alloc::ensure_capacity(&mut self.data, self.data_ptr + 1)?;
-
-                log::trace!("Previous value: {:?}", self.data[self.data_ptr]);
-                self.data[self.data_ptr] = self.data[self.data_ptr].wrapping_sub(&T::one());
-                log::trace!("New value: {:?}", self.data[self.data_ptr]);
-
-                Ok(instr_ptr + 1)
-            }
-            Instruction::Output => {
-                log::trace!("Outputting value at cell {}", self.data_ptr);
-
-                let val = self.data.get(self.data_ptr).cloned().unwrap_or_default();
-                let as_char: char = val
-                    .try_into()
-                    .ok()
-                    .and_then(char::from_u32)
-                    .unwrap_or(char::REPLACEMENT_CHARACTER);
-
-                log::trace!("Found value: {:?}, as char: {}", val, as_char);
-
-                write!(self.writer, "{}", as_char)?;
-
-                Ok(instr_ptr + 1)
-            }
-            Instruction::Input => {
-                log::trace!("Reading input into cell {}", self.data_ptr);
-
-                let mut buf = [0_u8; 1];
-                let num_read = self.reader.read(&mut buf)?;
-
-                if num_read == 1 {
-                    log::trace!("Read byte: {}", buf[0]);
-
-                    Alloc::ensure_capacity(&mut self.data, self.data_ptr + 1)?;
-
-                    let conv_buf: T = buf[0].into();
-
-                    log::trace!("Converted to cell type: {:?}", conv_buf);
-
-                    self.data[self.data_ptr] = conv_buf;
-                } else {
-                    log::debug!("Attempted to read input, but no input was available");
-                }
-
-                Ok(instr_ptr + 1)
-            }
-            Instruction::JumpFwd => {
-                let val = self.data.get(self.data_ptr).cloned().unwrap_or_default();
-
-                if val != T::zero() {
-                    log::trace!(
-                        "Value at cell {} is not zero, not jumping forward",
-                        self.data_ptr
-                    );
-                    return Ok(instr_ptr + 1);
-                }
-
-                log::trace!("Value at cell {} is zero, jumping forward", self.data_ptr);
-
-                let mut closing_tag = instr_ptr + 1;
-                let mut tag_stack: usize = 1;
-
-                while closing_tag < instrs.len() {
-                    match instrs[closing_tag] {
-                        Instruction::JumpFwd => {
-                            log::trace!(
-                                "Encountered additional JumpFwd, increasing tag stack {}=>{}",
-                                tag_stack,
-                                tag_stack + 1
-                            );
-                            tag_stack += 1
-                        }
-                        Instruction::JumpBack => {
-                            log::trace!(
-                                "Encountered JumpBack, decreasing tag stack {}=>{}",
-                                tag_stack,
-                                tag_stack - 1
-                            );
-                            tag_stack -= 1;
-                            if tag_stack == 0 {
-                                log::trace!("Found matching JumpBack at {}", closing_tag);
-                                return Ok(closing_tag);
-                            }
-                        }
-                        _ => {}
-                    }
-
-                    closing_tag += 1;
-                }
-
-                log::error!("No matching JumpBack found for JumpFwd at {}", instr_ptr);
-
-                Err(BrainfuckExecutionError::JumpMismatchError(
-                    MissingKind::JumpBack,
-                ))
-            }
-            Instruction::JumpBack => {
-                let val = self.data.get(self.data_ptr).cloned().unwrap_or_default();
-
-                if val == T::zero() {
-                    log::trace!("Value at cell {} is zero, not jumping back", self.data_ptr);
-                    return Ok(instr_ptr + 1);
-                }
-
-                if instr_ptr == 0 {
-                    log::error!("Instruction pointer is already 0, no matching opening bracket can be found");
-
-                    return Err(BrainfuckExecutionError::JumpMismatchError(
-                        MissingKind::JumpFwd,
-                    ));
-                }
-
-                let mut opening_tag = instr_ptr - 1;
-                let mut tag_stack: usize = 1;
-
-                while opening_tag > 0 {
-                    match instrs[opening_tag] {
-                        Instruction::JumpFwd => {
-                            log::trace!(
-                                "Encountered JumpFwd, decreasing tag stack {}=>{}",
-                                tag_stack,
-                                tag_stack - 1
-                            );
-                            tag_stack -= 1;
-                            if tag_stack == 0 {
-                                log::trace!("Found matching JumpFwd at {}", opening_tag);
-                                return Ok(opening_tag);
-                            }
-                        }
-                        Instruction::JumpBack => {
-                            log::trace!(
-                                "Encountered additional JumpBack, increasing tag stack {}=>{}",
-                                tag_stack,
-                                tag_stack + 1
-                            );
-                            tag_stack += 1
-                        }
-                        _ => {}
-                    }
-
-                    opening_tag -= 1;
-                }
-
-                log::error!("No matching JumpFwd found for JumpBack at {}", instr_ptr);
-
-                Err(BrainfuckExecutionError::JumpMismatchError(
-                    MissingKind::JumpFwd,
-                ))
-            }
+            Instruction::IncrDP => self.exec_incrdp(instr_ptr),
+            Instruction::DecrDP => self.exec_decrdp(instr_ptr),
+            Instruction::Incr => self.exec_incr(instr_ptr),
+            Instruction::Decr => self.exec_decr(instr_ptr),
+            Instruction::Output => self.exec_output(instr_ptr),
+            Instruction::Input => self.exec_input(instr_ptr),
+            Instruction::JumpFwd => self.exec_jumpfwd(instr_ptr, instrs),
+            Instruction::JumpBack => self.exec_jumpback(instr_ptr, instrs),
         }
     }
 }
