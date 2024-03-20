@@ -225,7 +225,7 @@ impl<T: BrainfuckCell, A: BrainfuckAllocator, R: Read, W: Write> Display for VMB
     }
 }
 
-impl<T: BrainfuckCell + 'static, A: BrainfuckAllocator + 'static, R: Read, W: Write>
+impl<T: BrainfuckCell + 'static, A: BrainfuckAllocator + 'static, R: Read + 'static, W: Write + 'static>
     VMBuilder<T, A, R, W>
 {
     /// Changes the type of the memory cells to `U`
@@ -287,10 +287,10 @@ impl<T: BrainfuckCell + 'static, A: BrainfuckAllocator + 'static, R: Read, W: Wr
     pub fn build(self) -> Box<dyn BrainfuckVM> {
         log::info!("Building Brainfuck VM with configuration: {}", self);
 
-        Box::new(VirtualMachine::<T, A, Stdin, Stdout>::new(
+        Box::new(VirtualMachine::<T, A, R, W>::new(
             self.initial_size,
-            stdin(),
-            stdout(),
+            self.reader,
+            self.writer,
         ))
     }
 }
