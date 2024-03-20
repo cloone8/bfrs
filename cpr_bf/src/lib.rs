@@ -417,9 +417,14 @@ impl<T: BrainfuckCell, Alloc: BrainfuckAllocator, R: Read, W: Write>
 
         Alloc::ensure_capacity(&mut self.data, self.data_ptr + 1)?;
 
-        log::trace!("Previous value: {:?}", self.data[self.data_ptr]);
-        self.data[self.data_ptr] = self.data[self.data_ptr].wrapping_add(&T::one());
-        log::trace!("New value: {:?}", self.data[self.data_ptr]);
+                log::trace!("Previous value: {:?}", self.data[self.data_ptr]);
+
+                unsafe {
+                    let val = self.data.get_unchecked_mut(self.data_ptr);
+                    *val = val.wrapping_add(&T::one())
+                }
+                
+                log::trace!("New value: {:?}", self.data[self.data_ptr]);
 
         Ok(instr_ptr + 1)
     }
@@ -429,9 +434,14 @@ impl<T: BrainfuckCell, Alloc: BrainfuckAllocator, R: Read, W: Write>
 
         Alloc::ensure_capacity(&mut self.data, self.data_ptr + 1)?;
 
-        log::trace!("Previous value: {:?}", self.data[self.data_ptr]);
-        self.data[self.data_ptr] = self.data[self.data_ptr].wrapping_sub(&T::one());
-        log::trace!("New value: {:?}", self.data[self.data_ptr]);
+                log::trace!("Previous value: {:?}", self.data[self.data_ptr]);
+
+                unsafe {
+                    let val = self.data.get_unchecked_mut(self.data_ptr);
+                    *val = val.wrapping_sub(&T::one())
+                }
+
+                log::trace!("New value: {:?}", self.data[self.data_ptr]);
 
         Ok(instr_ptr + 1)
     }
@@ -466,12 +476,15 @@ impl<T: BrainfuckCell, Alloc: BrainfuckAllocator, R: Read, W: Write>
 
             let conv_buf: T = buf[0].into();
 
-            log::trace!("Converted to cell type: {:?}", conv_buf);
+                    log::trace!("Converted to cell type: {:?}", conv_buf);
+                    
+                    unsafe {
+                        *self.data.get_unchecked_mut(self.data_ptr) = conv_buf;
+                    }
 
-            self.data[self.data_ptr] = conv_buf;
-        } else {
-            log::debug!("Attempted to read input, but no input was available");
-        }
+                } else {
+                    log::debug!("Attempted to read input, but no input was available");
+                }
 
         Ok(instr_ptr + 1)
     }
