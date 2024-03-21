@@ -80,3 +80,17 @@ impl From<LogLevel> for log::Level {
         }
     }
 }
+
+impl From<LogLevel> for log::LevelFilter {
+    fn from(log_level: LogLevel) -> Self {
+        match log_level {
+            LogLevel::Error => log::LevelFilter::Error,
+            LogLevel::Warn => log::LevelFilter::Warn,
+            LogLevel::Info => log::LevelFilter::Info,
+            #[cfg(debug_assertions)]
+            LogLevel::Debug => log::LevelFilter::Debug,
+            #[cfg(debug_assertions)]
+            LogLevel::Trace => log::LevelFilter::Trace,
+        }
+    }
+}

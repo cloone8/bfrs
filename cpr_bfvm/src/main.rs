@@ -5,8 +5,8 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use cli_args::CLIArgs;
-use cpr_bf::allocators::*;
-use cpr_bf::VMBuilder;
+use cpr_bf::{allocators::*, VMBuilder};
+use simplelog::{ColorChoice, ConfigBuilder, TermLogger, TerminalMode};
 
 macro_rules! assign_allocator_and_build {
     ($args:expr, $builder:expr) => {
@@ -85,7 +85,19 @@ macro_rules! process_args_and_build_vm {
 fn main() -> ExitCode {
     let args = CLIArgs::parse();
 
-    simple_logger::init_with_level(args.verbosity.clone().into()).unwrap();
+    let logconfig = ConfigBuilder::new()
+        .set_time_format_rfc3339()
+        .set_time_offset_to_local()
+        .expect("Could not set time offset to local")
+        .build();
+
+    TermLogger::init(
+        args.verbosity.clone().into(),
+        logconfig,
+        TerminalMode::Stderr,
+        ColorChoice::Auto,
+    )
+    .expect("Could not initialize logger");
 
     log::info!("Assigning VM options and building");
 
